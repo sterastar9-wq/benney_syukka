@@ -1,0 +1,5 @@
+{
+  "_説明": "Smart Pick の janCheckProducts.ts / janDisplayHelper.ts に直接書かれていた特別扱いの一覧。ベニー様版は空から始める。",
+  "janCheckSkus": [],
+  "janDisplayExceptions": {}
+}

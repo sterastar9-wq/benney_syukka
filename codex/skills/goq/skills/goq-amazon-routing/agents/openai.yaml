@@ -1,0 +1,4 @@
+interface:
+  display_name: "GoQ Amazon Routing"
+  short_description: "Route GoQ Amazon orders by package size and destination."
+  default_prompt: "GoQのAmazon振分用にある注文を、SKU入数と注文数量を考慮して配送業者と対象ステータスへ振り分けてください。"

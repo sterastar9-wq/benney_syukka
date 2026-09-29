@@ -1,0 +1,92 @@
+﻿# Dependencies and generated files
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+out/
+.next/
+.nuxt/
+coverage/
+playwright-report/
+test-results/
+.o11y/
+tmp/
+temp/
+cache/
+.cache/
+logs/
+output/
+outputs/
+*.log
+
+# Local and secret files
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*secret*
+*secrets*
+*credential*
+*credentials*
+*cookie*
+*cookies*
+*token*
+*tokens*
+*address_fix*
+*address_fixes*
+*customer*
+*order*
+settings.local.json
+*.local.json
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.sqlite
+*.sqlite3
+*.db
+*.csv
+# ピッキング集計の回帰テスト用（合成データのみ）
+!tools/local-picking/fixtures/*.csv
+*.tsv
+*.xlsx
+*.xls
+*.pdf
+
+# Browser profiles
+ChromeProfile/
+chrome-profile/
+User Data/
+Default/
+Local State
+Login Data
+Cookies
+Network Persistent State
+
+# Code files whose names match the data patterns above
+!tools/goq-print-picking-for-orders.mjs
+
+# One-off order fix scripts (contain customer order numbers/addresses)
+tools/goq-fix-*.mjs
+fix_goq_*.mjs
+
+# Local Chrome profiles for CDP automation
+.chrome-goq/
+.chrome-goq-visible/
+
+# Third-party agent skills (restore via skills-lock.json)
+.agents/
+
+# 元版のGitHub Actions（ベニー様用の設定前に自動実行させないため、pushしない）
+.github/workflows/

@@ -1,0 +1,20 @@
+# Browser automation (GoQ / Pricetar)
+playwright>=1.58
+
+# CSV handling
+pandas>=2.2
+
+# .env loading
+python-dotenv>=1.0
+
+# Google Sheets API
+google-auth>=2.30
+google-api-python-client>=2.130
+
+# Windows certificate store support in GshippingDataDownload.py
+certifi
+httplib2>=0.22
+google-auth-httplib2>=0.2
+
+# Tests
+pytest>=8
