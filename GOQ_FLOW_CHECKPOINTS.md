@@ -1,6 +1,6 @@
 # GoQ Flow Checkpoints
 
-This repository now treats every GoQ printing operation as a reviewed session.
+This repository treats every GoQ printing operation as a reviewed session.
 Do not print, download label files, export label CSVs, or press carrier label
 buttons unless the next action is approved by `scripts/goq_flow_guard.py`.
 
@@ -12,7 +12,7 @@ buttons unless the next action is approved by `scripts/goq_flow_guard.py`.
 - Reviewer agent: runs the guard before the action, checks evidence after the
   action, and marks the checkpoint complete or blocked.
 
-The same Codex instance may perform all roles, but the review command must run
+The same agent instance may perform all roles, but the review command must run
 between every side-effecting action.
 
 ## Status Values
@@ -30,30 +30,39 @@ Use these phases for each carrier:
 - `sort`
 - `picking_upload`
 - `picking_print`
-- `label_request`
+- `label_request` (GoQ API generation; not used by Benny Yamato-family)
+- `b2_csv_export` (Benny Yamato-family: export B2 Cloud CSV from GoQ)
 - `ehiden_csv_export`
+- `b2_import` (Benny Yamato-family: import the CSV into Yamato Business Members / B2 Cloud)
 - `ehiden_import`
 - `label_download`
 - `label_print`
 - `manifest_print`
 - `ship_history_export`
+- `b2_tracking_export` (Benny Yamato-family: export issued tracking numbers from B2 Cloud)
 - `goq_tracking_import`
 - `tracking_verify`
 - `post_label_verify`
 
 `label_print` is blocked until `picking_print` is completed for the same carrier.
-`label_download`, `label_print`, and `post_label_verify` are blocked until
-`label_request` is completed for the same carrier.
 
-Yamato-family phases are:
+### Yamato-family phases (Benny version: B2 Cloud CSV route)
 
-- `picking_print`
-- `label_request`
-- `label_download`
-- `label_print`
-- `post_label_verify`
+`yamato`, `compact`, and `nekopos` never use the GoQ API `label_request` /
+`label_download` phases. The order is:
 
-Normal Sagawa phases are:
+1. `picking_print` (普通紙)
+2. `b2_csv_export` (GoQ 送り状データ出力 → B2クラウド形式 CSV, verified against the target snapshot)
+3. `b2_import` (ヤマトビジネスメンバーズ → B2クラウド 外部データ取込)
+4. `label_print` (ヤマト / コンパクト → `ヤマト`, ネコポス → `ネコポス`)
+5. `b2_tracking_export` (発行済みデータ → 送り状番号)
+6. `goq_tracking_import` (GoQ 送り状番号取込)
+7. `tracking_verify`
+8. `post_label_verify`
+
+Each phase is blocked until the previous one is completed for the same carrier.
+
+### Normal Sagawa phases
 
 - `picking_print`
 - `ehiden_csv_export`
@@ -63,7 +72,7 @@ Normal Sagawa phases are:
 - `tracking_verify`
 - `post_label_verify`
 
-Sagawa 120+ phases are:
+### Sagawa 120+ phases
 
 - `picking_print`
 - `ehiden_csv_export`
@@ -84,38 +93,38 @@ are 120+ only.
 Initialize a session and record user constraints:
 
 ```powershell
-python scripts\goq_flow_guard.py init --session 20260611 --objective "Print Yamato onward only" --completed-carrier sagawa --block-carrier sagawa
+python scripts\goq_flow_guard.py init --session 20260930 --objective "Print Yamato onward only" --completed-carrier sagawa --block-carrier sagawa
 ```
 
-Before each side effect, reviewer approves or blocks the proposed action:
+Before each side effect, reviewer approves or blocks the proposed action.
 
 First capture live GoQ tabs, checkpoint state, legacy print guard, and print
 queue:
 
 ```powershell
-python scripts\goq_flow_guard.py capture --session 20260611 --name nekopos-before-picking-print --note "Before Nekopos picking print"
+python scripts\goq_flow_guard.py capture --session 20260930 --name yamato-before-picking-print --note "Before Yamato picking print"
 ```
 
 ```powershell
-python scripts\goq_flow_guard.py review --session 20260611 --carrier nekopos --phase picking_print --count 158 --printer "普通紙" --job-key 20260611-nekopos-picking-158 --csv "送り状ダウンロード\ネコポス徳島_picking_202606110912.csv" --evidence ".goq_flow_sessions\evidence\nekopos-before-picking-print.json" --with-print-queue
+python scripts\goq_flow_guard.py review --session 20260930 --carrier yamato --phase picking_print --count 58 --printer "普通紙" --job-key 20260930-yamato-picking-58 --csv ".o11y\goq-unified-print-flow\downloads\ヤマト_picking_202609300912.csv" --evidence ".goq_flow_sessions\evidence\yamato-before-picking-print.json" --with-print-queue
 ```
 
 Only if approved, mark it running:
 
 ```powershell
-python scripts\goq_flow_guard.py start --session 20260611 --carrier nekopos --phase picking_print --count 158 --printer "普通紙" --job-key 20260611-nekopos-picking-158 --csv "送り状ダウンロード\ネコポス徳島_picking_202606110912.csv" --evidence ".goq_flow_sessions\evidence\nekopos-before-picking-print.json" --with-print-queue
+python scripts\goq_flow_guard.py start --session 20260930 --carrier yamato --phase picking_print --count 58 --printer "普通紙" --job-key 20260930-yamato-picking-58 --csv ".o11y\goq-unified-print-flow\downloads\ヤマト_picking_202609300912.csv" --evidence ".goq_flow_sessions\evidence\yamato-before-picking-print.json" --with-print-queue
 ```
 
 After the action, reviewer records completion evidence:
 
 ```powershell
-python scripts\goq_flow_guard.py complete --session 20260611 --carrier nekopos --phase picking_print --note "Print preview closed and legacy guard has job key"
+python scripts\goq_flow_guard.py complete --session 20260930 --carrier yamato --phase picking_print --note "Print preview closed and legacy guard has job key"
 ```
 
 If state does not match, block instead:
 
 ```powershell
-python scripts\goq_flow_guard.py block --session 20260611 --carrier nekopos --phase label_print --reason "Printer destination mismatch"
+python scripts\goq_flow_guard.py block --session 20260930 --carrier yamato --phase label_print --reason "Printer destination mismatch"
 ```
 
 ## Duplicate Prevention
@@ -132,12 +141,14 @@ The guard blocks:
 - A print destination that does not match the carrier route.
 - A CSV row count that does not match `--count`.
 
-## Current Incident State
+## Printer Routes
 
-For the 2026-06-11 session, Sagawa was already printed by the user and must be
-blocked. Yamato 123, Compact 50, and Nekopos 158 were recorded as printed in
-`.goq_print_guard.json`. A later Nekopos row `187703` had a blank ship date and
-was not part of the 158-row CSV batch.
+Printer names on this PC contain these strings (override with `.env` `PRINTER_*`):
+
+- picking list: `普通紙`
+- ヤマト / コンパクト labels: `ヤマト`
+- ネコポス labels: `ネコポス`
+- 佐川 labels: `佐川`
 
 ## Legacy Script Policy
 

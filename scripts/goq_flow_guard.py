@@ -38,14 +38,31 @@ PHASE_ORDER = {
     "picking_print": 30,
     "label_request": 40,
     "ehiden_csv_export": 40,
+    # ベニー様版ヤマト系: GoQ から B2クラウド用CSVを出力 → ヤマトビジネスメンバーズに取込 → 印刷 → 送り状番号を GoQ へ戻す
+    "b2_csv_export": 40,
     "ehiden_import": 50,
+    "b2_import": 50,
     "label_download": 50,
     "label_print": 60,
     "manifest_print": 70,
     "ship_history_export": 80,
+    "b2_tracking_export": 80,
     "goq_tracking_import": 90,
     "tracking_verify": 100,
     "post_label_verify": 110,
+}
+
+YAMATO_B2_PHASES = {
+    "sort",
+    "picking_upload",
+    "picking_print",
+    "b2_csv_export",
+    "b2_import",
+    "label_print",
+    "b2_tracking_export",
+    "goq_tracking_import",
+    "tracking_verify",
+    "post_label_verify",
 }
 
 CARRIER_ALLOWED_PHASES = {
@@ -73,12 +90,24 @@ CARRIER_ALLOWED_PHASES = {
         "tracking_verify",
         "post_label_verify",
     },
-    "yamato": {"sort", "picking_upload", "picking_print", "label_request", "label_download", "label_print", "post_label_verify"},
-    "compact": {"sort", "picking_upload", "picking_print", "label_request", "label_download", "label_print", "post_label_verify"},
-    "nekopos": {"sort", "picking_upload", "picking_print", "label_request", "label_download", "label_print", "post_label_verify"},
+    # ベニー様版: ヤマト系は GoQ の発行ボタン（label_request / label_download）を使わず B2クラウドCSV経路のみ
+    "yamato": set(YAMATO_B2_PHASES),
+    "compact": set(YAMATO_B2_PHASES),
+    "nekopos": set(YAMATO_B2_PHASES),
+}
+
+YAMATO_B2_PREREQUISITES = {
+    "b2_csv_export": ["picking_print"],
+    "b2_import": ["b2_csv_export"],
+    "label_print": ["b2_import"],
+    "b2_tracking_export": ["label_print"],
+    "goq_tracking_import": ["b2_tracking_export"],
+    "tracking_verify": ["goq_tracking_import"],
+    "post_label_verify": ["tracking_verify"],
 }
 
 PHASE_PREREQUISITES = {
+    **{(carrier, phase): list(required) for carrier in ("yamato", "compact", "nekopos") for phase, required in YAMATO_B2_PREREQUISITES.items()},
     ("sagawa", "ehiden_csv_export"): ["picking_print"],
     ("sagawa", "ehiden_import"): ["ehiden_csv_export"],
     ("sagawa", "label_print"): ["ehiden_import"],
@@ -95,13 +124,15 @@ PHASE_PREREQUISITES = {
     ("sagawa120", "post_label_verify"): ["tracking_verify"],
 }
 
+# このPCのプリンタ名（FUJIFILM Apeos C5240普通紙 / ヤマト / 佐川 / ネコポス（手差し））に「含まれる」文字列。
+# 変える場合は .env の PRINTER_* と tools/lib/printers.mjs と合わせる。
 PRINTERS = {
-    "picking": "普通紙",
-    "sagawa": "佐川",
-    "sagawa120": "佐川",
-    "yamato": "ヤマト/コンパクト",
-    "compact": "ヤマト/コンパクト",
-    "nekopos": "ネコポス",
+    "picking": os.getenv("PRINTER_PICKING", "普通紙"),
+    "sagawa": os.getenv("PRINTER_SAGAWA", "佐川"),
+    "sagawa120": os.getenv("PRINTER_SAGAWA", "佐川"),
+    "yamato": os.getenv("PRINTER_YAMATO", "ヤマト"),
+    "compact": os.getenv("PRINTER_YAMATO", "ヤマト"),
+    "nekopos": os.getenv("PRINTER_NEKOPOSU", "ネコポス"),
 }
 
 
@@ -328,7 +359,7 @@ def review_proposal(state: dict[str, Any], proposal: Proposal) -> tuple[str, lis
     if proposal.phase in {"picking_print", "label_print"} and not proposal.printer:
         errors.append("printer_required_for_print")
 
-    if proposal.phase in {"picking_print", "label_request", "label_download", "label_print", "post_label_verify"}:
+    if proposal.phase in {"picking_print", "label_request", "label_download", "label_print", "post_label_verify", "b2_csv_export", "b2_import", "goq_tracking_import"}:
         if not proposal.evidence_file:
             errors.append("live_state_evidence_file_required")
 

@@ -1,20 +1,46 @@
-# GoQ print flow runner
+# GoQ print flow runner (Benny version)
 
 `goq-print-flow.mjs` unifies the non-Sagawa-120 print flow.
 
 Sagawa 120+ is intentionally excluded because it uses the e-Hiden III / Sagawa Smart Club route.
 
+Benny's flow: GoQ login → local picking-list print → **B2 Cloud CSV export from GoQ** → label print on Yamato Business Members (`tools/yamato-b2/`). Runtime is local Node.js + Chrome (`scripts\start-chrome-cdp.ps1`); Docker is not used; credentials come from `.env` only.
+
+## B2 Cloud CSV Route
+
+Yamato-family statuses (`yamato`, `compact`, `nekoposu`, and their `-amazon` variants) have `labelMode: 'b2-csv'` in `STATUS`. For them the runner does **not** press `#B2CloudGeneratePdfApi`. Instead, inside `outputLabels()`:
+
+1. Reselect all visible rows, keep only targets, and re-verify today's ship date / empty tracking number (same as before).
+2. Record the label target snapshot (`recorded shipping-label target snapshot`).
+3. `exportLabelCsvToFile(config)`:
+   - Select the B2 Cloud option in `#trader_s` (value `b2_cloud` by default, or `.env` `GOQ_B2_CSV_FORMAT_VALUE`; falls back to an option whose text matches `B2|Ｂ２|ヤマト` and is not e-飛伝).
+   - Install hooks on `HTMLFormElement.prototype.submit`, the capturing `submit` event, and `window.open` so the output button (`button[name="B020"]`, which normally posts to a new window) does not open anything; then trusted-click the button. If no submission is captured within 8 s, call the page's `downcsv()` once.
+   - Replay the captured `action`/`method`/body with `fetch` (same-origin). A direct CSV response is saved; an HTML response containing `infile.php?fname=` is followed like the picking CSV export.
+   - Save under `.o11y/goq-unified-print-flow/downloads/` and record `exported shipping label csv` (format option, options seen, checked IDs, submit action, response headers, dialogs).
+4. `verifyLabelCsvAgainstTargets()` (`tools/lib/label-csv.mjs`) decodes Shift_JIS, parses the CSV, and requires that every target GoQ ID or order number appears in a data row and that no row belongs to another order (multi-parcel duplicates allowed). Result is stored as `run.labelIssuanceVerification` with `mode: 'b2-csv'` and recorded as `verified shipping label csv against target snapshot`. Mismatch stops the run.
+5. `writeB2Handoff()` writes `.o11y/goq-unified-print-flow/b2-handoff/<time>-<status>.json` (`csv`, `targets`, `labelPrinter`, `runLog`) and records `wrote b2 cloud handoff`, then the GoQ-side run ends. Label printing, tracking export and GoQ `送り状番号取込` are done by `tools/yamato-b2/import-and-print.mjs` (to be built after the site survey).
+
+The reviewer (`goq-run-review.mjs`) switches its goal checks by `run.labelMode`: in b2-csv mode it requires the export, the verification, and the handoff, and it fails the run if a GoQ-side label request/download step appears (`GOQ_LABEL_API_USED_IN_B2_CSV_MODE`). Ordering (picking before CSV export), target snapshot, and address-warning gates apply the same way as for label generation.
+
+Sagawa statuses (`sagawa`, `hold-sagawa`) keep `labelMode: 'goq-api'` and the original Smart API flow described below.
+
+## GoQ Login
+
+Before anything else the runner calls `ensureGoqLogin()` from `tools/goq-login.mjs`. If a GoQ tab is already logged in it records `goq login state verified`; if the login page is shown it fills `#login_id` / `#login_pw`, presses `認証する`, fills `#seq_id` / `#seq_pw`, presses `ログイン`, accepts `同意してGoQSystemを利用します` when present, and records `goq login attempted` (no password values). `--no-auto-login` disables this and stops instead. Standalone: `npm run goq:login` (`--check` for state only).
+
 `tools/goq-print-flow.CHECKLIST.md` is the canonical common-flow checklist and status-difference table. The runner records it as required rule material before side effects, and the reviewer must use it with `run.goal` when judging completion.
 
 ## Supported Statuses
 
-| Key | GoQ status | Expected carrier | Label button | Label printer |
+| Key | GoQ status | Expected carrier | Label mode | Label printer |
 | --- | --- | --- | --- | --- |
-| `sagawa` | 佐川 | 佐川急便 | 佐川急便送り状発行 | 佐川 |
-| `yamato` | ヤマト | ヤマト運輸 | ヤマト運輸送り状発行 | ヤマト/コンパクト |
-| `compact` | コンパクト | ヤマト運輸 コンパクト | ヤマト運輸送り状発行 | ヤマト/コンパクト |
-| `nekoposu` | ネコポス徳島 | ヤマト運輸 ネコポス | ヤマト運輸送り状発行 | ネコポス |
-| `hold-sagawa` | 保留（佐川想定） | 佐川急便 | 佐川急便送り状発行 | 佐川 |
+| `sagawa` | 佐川 | 佐川急便 | goq-api (佐川急便送り状発行) | 佐川 |
+| `yamato` | ヤマト | ヤマト運輸 | b2-csv | ヤマト |
+| `compact` | コンパクト | ヤマト運輸 コンパクト | b2-csv | ヤマト |
+| `nekoposu` | ネコポス徳島 | ヤマト運輸 ネコポス | b2-csv | ネコポス |
+| `hold-sagawa` | 保留（佐川想定） | 佐川急便 | goq-api (佐川急便送り状発行) | 佐川 |
+
+Printer strings are substrings of this PC's printer names (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`) and can be overridden with `.env` `PRINTER_PICKING` / `PRINTER_YAMATO` / `PRINTER_NEKOPOSU` / `PRINTER_SAGAWA` (`tools/lib/printers.mjs`).
 
 Amazon-only variants are explicit separate status keys:
 
@@ -30,13 +56,15 @@ The base status keys never apply the Amazon tab unless `--amazon-only` or `--sto
 
 Default mode is dry-run. It navigates to the status and reports eligible, excluded, and blocked rows, but does not select, overwrite, export, generate, download, or print.
 
-At startup, the runner loads the required rule material (`AGENTS.md`, this README, the GoQ print-flow skill, and the GoQ print-flow memory file) and records it in the run log. If any required rule source is missing or does not contain the expected guardrail sections, the run stops before side effects.
+At startup, the runner loads the required rule material (`AGENTS.md`, this README, `tools/goq-print-flow.CHECKLIST.md`, `.claude/skills/goq-shipping-label-print-flow/SKILL.md`, and `codex/memories/goq-print-flow-rules.md`; override the last two with `.env` `GOQ_RULE_SKILL_FILE` / `GOQ_RULE_MEMORY_FILE`) and records it in the run log. If any required rule source is missing or does not contain the expected guardrail sections, the run stops before side effects.
 
 Autonomous operation must use the reviewed wrapper. The wrapper runs the flow, always runs the review command against the produced run log, writes a review report under `.o11y/goq-unified-print-flow/reviews/`, and exits non-zero when the flow fails, the review fails, or review warnings are present.
 
 ```powershell
-docker compose exec goq npm run goq:print -- --status sagawa --port 9223 --execute
+npm run goq:print -- --status yamato --execute
 ```
+
+`--port` defaults to `.env` `GOQ_CDP_PORT` (9223).
 
 Use `tools/goq-print-flow.mjs` directly only for debugging, never as the normal autonomous print path.
 
@@ -357,7 +385,8 @@ The reviewer fails when rule material was not loaded, unreviewed address warning
 
 ## Useful Options
 
-- `--port 9222`: Chrome DevTools port.
+- `--port 9223`: Chrome DevTools port (default from `.env` `GOQ_CDP_PORT`).
+- `--no-auto-login`: do not log in from `.env`; stop if GoQ is not logged in.
 - `--date YYYY-MM-DD`: override ship date; default is local today.
 - `--skip-print`: perform GoQ generation/download steps without pressing print.
 - `--skip-labels`: stop after picking-list export/print.

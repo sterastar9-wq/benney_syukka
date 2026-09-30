@@ -7,53 +7,76 @@ import { promisify } from 'node:util';
 import { WebSocket } from 'ws';
 import { cdpHttpUrl, cdpWebSocketUrl, fileUrlForBrowser, pathForBrowser } from './cdp-connection.mjs';
 import { buildLocalPickingPdf } from './local-picking/build.mjs';
+import { loadEnv, envNumber } from './lib/env.mjs';
+import { PICKING_PRINTER, LABEL_PRINTER_BY_STATUS } from './lib/printers.mjs';
+import { ensureGoqLogin } from './goq-login.mjs';
+import { verifyLabelCsvFile } from './lib/label-csv.mjs';
 
 const execFile = promisify(execFileCallback);
+loadEnv();
+
+// 送り状の出し方
+//   goq-api : GoQ の発行ボタン（Smart API / B2クラウドAPI）でPDFを作る（元版の方式。佐川で使用）
+//   b2-csv  : GoQ から B2クラウド用の送り状データCSVを出力し、ヤマトビジネスメンバーズ（B2クラウド）に取り込んで印刷する（ベニー様版のヤマト系）
+const LABEL_MODE_GOQ_API = 'goq-api';
+const LABEL_MODE_B2_CSV = 'b2-csv';
+// GoQ の送り状データ出力 <select id="trader_s"> の B2クラウド用 option の value。
+// 実画面で違う場合は .env の GOQ_B2_CSV_FORMAT_VALUE で上書きする（option の表示文言でも照合する）。
+const B2_CSV_FORMAT_VALUE = process.env.GOQ_B2_CSV_FORMAT_VALUE || 'b2_cloud';
+const B2_CSV_FORMAT_TEXT = /B2|Ｂ２|ヤマト/;
+const B2_HANDOFF_DIR = path.join('.o11y', 'goq-unified-print-flow', 'b2-handoff');
 
 const STATUS = {
   sagawa: {
     label: '佐川',
     stat: 28,
     carrierText: '佐川急便',
+    labelMode: 'goq-api',
     labelButton: '#smartAPI',
     labelButtonText: '佐川急便送り状発行',
-    labelPrinter: '佐川',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.sagawa,
   },
   yamato: {
     label: 'ヤマト',
     stat: 30,
     carrierText: 'ヤマト運輸',
+    labelMode: 'b2-csv',
+    labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
     labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: 'ヤマト/コンパクト',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.yamato,
   },
   compact: {
     label: 'コンパクト',
     stat: 29,
     carrierText: 'ヤマト運輸 コンパクト',
+    labelMode: 'b2-csv',
+    labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
     labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: 'ヤマト/コンパクト',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.compact,
   },
   nekoposu: {
     label: 'ネコポス徳島',
     stat: 31,
     carrierText: 'ヤマト運輸 ネコポス',
+    labelMode: 'b2-csv',
+    labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
     labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: 'ネコポス',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.nekoposu,
   },
   'hold-sagawa': {
     label: '保留（佐川想定）',
     stat: 10,
     carrierText: '佐川急便',
+    labelMode: 'goq-api',
     labelButton: '#smartAPI',
     labelButtonText: '佐川急便送り状発行',
-    labelPrinter: '佐川',
+    labelPrinter: LABEL_PRINTER_BY_STATUS['hold-sagawa'],
   },
 };
 
-const PICKING_PRINTER = '普通紙';
 const AMAZON_STATUS_ALIASES = new Map([
   ['sagawa-amazon', 'sagawa'],
   ['yamato-amazon', 'yamato'],
@@ -69,19 +92,14 @@ const GOQ_DOWNLOAD_URL = 'https://order.goqsystem.com/goq21/downloadpage.php';
 const LOCAL_PICKING_DIR = path.join('.o11y', 'goq-unified-print-flow', 'picking');
 const DOWNLOADS_DIR = path.join(os.homedir(), 'Downloads');
 const RUN_DIR = path.join('.o11y', 'goq-unified-print-flow', 'runs');
-const LABEL_PRINTER_BY_STATUS = {
-  sagawa: '佐川',
-  'hold-sagawa': '佐川',
-  yamato: 'ヤマト/コンパクト',
-  compact: 'ヤマト/コンパクト',
-  nekoposu: 'ネコポス',
-};
+// 必須ルール。ベニー様版はすべてリポジトリ内に置く（~/.codex には依存しない）。
+// 別の場所を使う場合は .env の GOQ_RULE_SKILL_FILE / GOQ_RULE_MEMORY_FILE で上書きする。
 const REQUIRED_RULE_SOURCES = [
-  { key: 'agents', file: path.resolve('AGENTS.md'), required: ['GoQ', '送り状未発行', 'destination', '送り状発行ダイアログ', 'ダッシュボードお知らせモーダル'] },
-  { key: 'readme', file: path.resolve('tools', 'goq-print-flow.README.md'), required: ['Address Warning Handling', 'Chrome Print Preview DOM', 'Shipping Label Download Wait', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'post-label difference check', 'actual Chrome print-preview destination', 'RequestB2CloudDeliveryInvoice.php', 'b2CloudDeliveryInvoiceExportRequest'] },
-  { key: 'checklist', file: path.resolve('tools', 'goq-print-flow.CHECKLIST.md'), required: ['Common Flow', 'Status Differences', 'Completion Standard', 'run.goal', '住所不正', '普通紙', 'RequestB2CloudDeliveryInvoice.php', 'b2CloudDeliveryInvoiceExportRequest'] },
-  { key: 'skill', file: path.join(os.homedir(), '.codex', 'skills', 'goq-shipping-label-print-flow', 'SKILL.md'), required: ['Address Warning', 'Split address fields', 'Print Preview Checks', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'target snapshot', 'actual Chrome print-preview destination', 'Yamato B2 Cloud Request Evidence', 'b2CloudDeliveryInvoiceExportRequest'] },
-  { key: 'memory', file: path.join(os.homedir(), '.codex', 'memories', 'goq-print-flow-rules.md'), required: ['Address Warning Detection And Normalization', 'Label-Issuance Difference Check', 'Printer Destination Review Guard', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'Yamato B2 Cloud Request Evidence', 'b2CloudDeliveryInvoiceExportRequest'] },
+  { key: 'agents', file: path.resolve('AGENTS.md'), required: ['GoQ', '送り状未発行', 'destination', '送り状発行ダイアログ', 'ダッシュボードお知らせモーダル', 'B2クラウド'] },
+  { key: 'readme', file: path.resolve('tools', 'goq-print-flow.README.md'), required: ['Address Warning Handling', 'Chrome Print Preview DOM', 'Shipping Label Download Wait', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'post-label difference check', 'actual Chrome print-preview destination', 'RequestB2CloudDeliveryInvoice.php', 'b2CloudDeliveryInvoiceExportRequest', 'B2 Cloud CSV Route'] },
+  { key: 'checklist', file: path.resolve('tools', 'goq-print-flow.CHECKLIST.md'), required: ['Common Flow', 'Status Differences', 'Completion Standard', 'run.goal', '住所不正', '普通紙', 'RequestB2CloudDeliveryInvoice.php', 'b2CloudDeliveryInvoiceExportRequest', 'exported shipping label csv'] },
+  { key: 'skill', file: path.resolve(process.env.GOQ_RULE_SKILL_FILE || path.join('.claude', 'skills', 'goq-shipping-label-print-flow', 'SKILL.md')), required: ['Address Warning', 'Split address fields', 'Print Preview Checks', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'target snapshot', 'actual Chrome print-preview destination', 'Yamato B2 Cloud Request Evidence', 'b2CloudDeliveryInvoiceExportRequest', 'B2 Cloud CSV Route'] },
+  { key: 'memory', file: path.resolve(process.env.GOQ_RULE_MEMORY_FILE || path.join('codex', 'memories', 'goq-print-flow-rules.md')), required: ['Address Warning Detection And Normalization', 'Label-Issuance Difference Check', 'Printer Destination Review Guard', 'Label Generation Dialog Handling', 'Dashboard Notice Modal', 'Yamato B2 Cloud Request Evidence', 'b2CloudDeliveryInvoiceExportRequest', 'B2 Cloud CSV Route'] },
 ];
 
 let args;
@@ -123,7 +141,7 @@ async function main() {
   if (!config) fail(`Unknown status "${args.status}". Use one of: ${[...Object.keys(STATUS), ...AMAZON_STATUS_ALIASES.keys()].join(', ')}`);
 
   execute = args.execute === true;
-  port = Number(args.port || 9222);
+  port = Number(args.port || envNumber('GOQ_CDP_PORT', 9223));
   onlyOrder = args.order || '';
   excludeOrders = new Set(splitList(args.exclude));
   skipPrint = args['skip-print'] === true;
@@ -148,6 +166,8 @@ async function main() {
     baseStatusKey: statusResolution.baseStatus,
     status: config.label,
     stat: config.stat,
+    labelMode: config.labelMode || LABEL_MODE_GOQ_API,
+    labelPrinter: config.labelPrinter,
     date: today,
     onlyOrder,
     excludeOrders: [...excludeOrders],
@@ -185,6 +205,11 @@ async function main() {
   try {
   const goq = await connectToGoq(port);
   await goq.enable();
+  // ベニー様フロー 1: GoQ ログイン。ログイン画面なら .env の情報でログインしてから先へ進む。
+  run.login = await ensureGoqLogin(goq, { step, allowLogin: args['no-auto-login'] !== true });
+  if (run.login.result === 'not-logged-in') {
+    failWithRun('Stopped because GoQ is not logged in (auto-login disabled by --no-auto-login).', 2);
+  }
   if (args['print-existing-label-at']) {
     if (!execute) failWithRun('print-existing-label-at requires --execute.', 2);
     const requestedAt = parseLocalDateTime(args['print-existing-label-at']);
@@ -495,6 +520,26 @@ async function main() {
     });
     run.labelTargetSnapshot = labelTargetSnapshot;
     step('recorded shipping-label target snapshot', labelTargetSnapshot);
+    if ((config.labelMode || LABEL_MODE_GOQ_API) === LABEL_MODE_B2_CSV) {
+      // ベニー様フロー 3: GoQ から B2クラウド用の送り状データCSVを出力する。GoQ側の発行ボタン（B2クラウドAPI）は押さない。
+      const labelCsv = await goq.exportLabelCsvToFile(config);
+      step('exported shipping label csv', { ...labelCsv, requestedAt: labelRequestTime.toISOString(), mode: LABEL_MODE_B2_CSV });
+      const csvVerification = verifyLabelCsvAgainstTargets(labelCsv, labelTargetSnapshot.targets);
+      run.labelIssuanceVerification = csvVerification;
+      step('verified shipping label csv against target snapshot', csvVerification);
+      if (!csvVerification.ok) {
+        failWithRun('Stopped because the exported B2 Cloud CSV does not match the shipping-label target snapshot.', 4);
+      }
+      const handoff = writeB2Handoff({ labelCsv, snapshot: labelTargetSnapshot, verification: csvVerification });
+      run.b2Handoff = handoff;
+      step('wrote b2 cloud handoff', handoff);
+      step('shipping label print is delegated to yamato business members', {
+        next: `node tools/yamato-b2/import-and-print.mjs --handoff ${JSON.stringify(handoff.file)} --port ${port}`,
+        labelPrinter: config.labelPrinter,
+        note: 'ヤマトビジネスメンバーズ（B2クラウド）にCSVを取り込み、送り状を印刷し、送り状番号をGoQへ戻す',
+      });
+      return { stopped: false, handoff };
+    }
     const labelClick = await goq.clickLabelButton(config);
     step('requested shipping label generation', { button: config.labelButtonText, requestedAt: labelRequestTime.toISOString(), click: labelClick });
     if (inspectLabelDialog) {
@@ -590,7 +635,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
     const key = arg.slice(2);
-    if (['execute', 'skip-print', 'skip-picking', 'skip-labels', 'label-first', 'stop-after-date', 'preview-only-picking', 'stop-before-label-print', 'resume', 'amazon-only', 'approve-address-normalization', 'address-fixed-confirmed', 'address-unresolved-confirmed'].includes(key)) {
+    if (['execute', 'skip-print', 'skip-picking', 'skip-labels', 'label-first', 'stop-after-date', 'preview-only-picking', 'stop-before-label-print', 'resume', 'amazon-only', 'approve-address-normalization', 'address-fixed-confirmed', 'address-unresolved-confirmed', 'no-auto-login', 'inspect-label-dialog'].includes(key)) {
       out[key] = true;
     } else {
       out[key] = argv[++i];
@@ -698,11 +743,25 @@ function parseLocalDateTime(value) {
 }
 
 function buildRunGoal({ args, statusResolution, config, execute, today, onlyOrder, excludeOrders, storeTab }) {
+  const b2Csv = (config.labelMode || LABEL_MODE_GOQ_API) === LABEL_MODE_B2_CSV;
   const outputMode = args['skip-print'] === true
     ? 'generate-and-verify-without-print'
     : args['stop-before-label-print'] === true
       ? 'stop-before-label-print'
-      : 'print';
+      : b2Csv
+        ? 'picking-print-and-b2-csv-handoff'
+        : 'print';
+  const labelCriteria = b2Csv
+    ? [
+      'Shipping-label CSV export records an exact target snapshot before the export.',
+      'The exported B2 Cloud CSV is verified against the target snapshot (every target present, no extra rows).',
+      'A B2 Cloud handoff file is written for the Yamato Business Members import/print step; GoQ-side label generation buttons are not pressed.',
+    ]
+    : [
+      'Shipping-label generation records an exact target snapshot before the request.',
+      'Shipping-label issuance is verified against the target snapshot after generation.',
+      'Shipping label is printed to the status-specific printer unless explicitly skipped or stopped before print.',
+    ];
   return {
     objective: execute
       ? `Complete GoQ ${config.label} shipping set for ${today}`
@@ -719,21 +778,51 @@ function buildRunGoal({ args, statusResolution, config, execute, today, onlyOrde
       date: today,
       mode: execute ? 'execute' : 'dry-run',
       outputMode,
+      labelMode: config.labelMode || LABEL_MODE_GOQ_API,
       onlyOrder: onlyOrder || '',
       excludedByRequest: [...excludeOrders],
       storeTab: storeTab || '',
     },
     successCriteria: [
+      'GoQ login state is verified (or auto-login from .env succeeds) before side effects.',
       'Required rule material is loaded before side effects.',
       'Address warnings are safely fixed, externally/operator confirmed, or memo-marked as 住所不正 and excluded before output.',
       'Eligible target rows have the expected carrier, today shipping date before output, and no prior tracking/invoice marker.',
       'Picking list is printed or explicitly preview-only/skipped according to requested options.',
-      'Shipping-label generation records an exact target snapshot before the request.',
-      'Shipping-label issuance is verified against the target snapshot after generation.',
-      'Shipping label is printed to the status-specific printer unless explicitly skipped or stopped before print.',
+      ...labelCriteria,
       'The review gate reports no violations and no unaccepted warnings.',
     ],
   };
+}
+
+// B2クラウド用CSV（Shift_JIS）を対象スナップショットと突合する（tools/lib/label-csv.mjs）
+function verifyLabelCsvAgainstTargets(labelCsv, targets) {
+  return verifyLabelCsvFile(labelCsv.fullName, targets);
+}
+
+// ヤマトビジネスメンバーズ側（tools/yamato-b2/）へ渡す引き継ぎファイルを書く
+function writeB2Handoff({ labelCsv, snapshot, verification }) {
+  fs.mkdirSync(B2_HANDOFF_DIR, { recursive: true });
+  const file = path.join(B2_HANDOFF_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}-${args.status}.json`);
+  const handoff = {
+    createdAt: new Date().toISOString(),
+    statusKey: args.status,
+    baseStatusKey: run.baseStatusKey,
+    status: config.label,
+    stat: config.stat,
+    date: today,
+    labelMode: LABEL_MODE_B2_CSV,
+    labelPrinter: config.labelPrinter,
+    csv: path.resolve(labelCsv.fullName),
+    csvBytes: labelCsv.size,
+    csvFormat: labelCsv.format,
+    dataRowCount: verification.dataRowCount,
+    targets: snapshot.targets.map(target => ({ goqId: target.goqId, orderNumber: target.orderNumber, carrier: target.carrier, shipDate: target.shipDate })),
+    runLog: path.resolve(run.logFile),
+    yamato: { imported: false, printed: false, trackingImportedToGoq: false },
+  };
+  fs.writeFileSync(file, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
+  return { file: path.resolve(file), targetCount: handoff.targets.length, csv: handoff.csv, labelPrinter: handoff.labelPrinter };
 }
 
 function fail(message) {
@@ -966,28 +1055,38 @@ function reviewRunInProcess(candidate) {
   const downloadedLabel = hasStep('downloaded shipping label pdf') || hasStep('downloaded existing shipping label pdf');
   const downloadedExistingLabel = hasStep('downloaded existing shipping label pdf');
   const printedLabel = hasStep('printed shipping label') || hasStep('stopped before shipping label print button') || hasStep('printed existing shipping label');
+  const exportedLabelCsv = hasStep('exported shipping label csv');
 
-  for (const issue of collectGoalIssues(candidate, { printedPicking, requestedLabel, downloadedLabel, printedLabel, hasStep })) {
+  for (const issue of collectGoalIssues(candidate, { printedPicking, requestedLabel, downloadedLabel, printedLabel, exportedLabelCsv, hasStep })) {
     violations.push(issue);
+  }
+  if (exportedLabelCsv && !hasStep('recorded shipping-label target snapshot')) {
+    violations.push({ code: 'LABEL_TARGET_SNAPSHOT_MISSING', message: 'B2 Cloud CSV export occurred without recording the exact target snapshot.' });
+  }
+  if (exportedLabelCsv && !printedPicking && candidate.args?.['skip-picking'] !== true && !candidate.error) {
+    violations.push({ code: 'LABEL_BEFORE_PICKING', message: 'B2 Cloud CSV export occurred without picking-list output in the same run.' });
+  }
+  if (exportedLabelCsv && printedPicking && firstIndex('exported shipping label csv') < firstIndex('picking') && candidate.args?.['label-first'] !== true) {
+    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud CSV export occurred before picking-list output.' });
   }
 
   if (!candidate.ruleMaterial?.ok) {
     violations.push({ code: 'RULE_MATERIAL_NOT_LOADED', message: 'Required GoQ rule material was not loaded at startup.' });
   }
   const unreviewed = candidate.addressWarningReviewGuard?.unreviewed || [];
-  if (unreviewed.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unreviewed.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({ code: 'ADDRESS_WARNING_REVIEW_BYPASS', message: 'Output flow continued with address warnings that were not reviewed/fixed.', rows: unreviewed });
   }
   const excludedWarnings = collectManualExcludedAddressWarnings(candidate);
-  if (excludedWarnings.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (excludedWarnings.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({ code: 'ADDRESS_WARNING_MANUAL_EXCLUDE_BYPASS', message: 'Address-warning rows were manually excluded without being marked fixed.', rows: excludedWarnings });
   }
   const unvalidatedFixedWarnings = collectUnvalidatedFixedAddressWarnings(candidate);
-  if (unvalidatedFixedWarnings.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unvalidatedFixedWarnings.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({ code: 'ADDRESS_WARNING_UNVALIDATED_FIXED', message: 'Address-warning rows were treated as fixed even though no safe change or external validation was recorded.', rows: unvalidatedFixedWarnings });
   }
   const unresolvedWithoutMemo = collectUnresolvedAddressWarningsWithoutMemo(candidate);
-  if (unresolvedWithoutMemo.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unresolvedWithoutMemo.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({ code: 'ADDRESS_UNRESOLVED_MEMO_MISSING', message: 'Unresolved address-warning rows were excluded without a recorded one-line memo marker.', rows: unresolvedWithoutMemo });
   }
   if (requestedLabel && !printedPicking && candidate.args?.['skip-picking'] !== true && candidate.args?.['print-existing-label-at'] !== true && !candidate.error) {
@@ -1133,6 +1232,14 @@ function collectGoalIssues(candidate, observed) {
 
   if (!skipPicking && !observed.printedPicking && !previewOnlyPicking) {
     issues.push({ code: 'GOAL_PICKING_OUTPUT_MISSING', message: 'Goal requires a picking-list output, but no picking print/preview step was recorded.' });
+  }
+  if (!skipLabels && (candidate.labelMode || requested.labelMode) === LABEL_MODE_B2_CSV) {
+    // ベニー様版ヤマト系: GoQ側の発行ではなく、CSV出力 → 突合 → 引き継ぎファイルまでがこの run のゴール
+    if (!observed.hasStep('exported shipping label csv')) issues.push({ code: 'GOAL_LABEL_CSV_EXPORT_MISSING', message: 'Goal requires the B2 Cloud shipping-label CSV export, but no export step was recorded.' });
+    if (!candidate.labelIssuanceVerification?.ok) issues.push({ code: 'GOAL_LABEL_CSV_NOT_VERIFIED', message: 'Goal requires the exported CSV to match the target snapshot, but verification is missing or failed.', detail: candidate.labelIssuanceVerification || null });
+    if (!observed.hasStep('wrote b2 cloud handoff')) issues.push({ code: 'GOAL_B2_HANDOFF_MISSING', message: 'Goal requires a B2 Cloud handoff file for the Yamato Business Members step, but none was written.' });
+    if (observed.requestedLabel || observed.downloadedLabel) issues.push({ code: 'GOQ_LABEL_API_USED_IN_B2_CSV_MODE', message: 'GoQ-side label generation was used although this status must export the B2 Cloud CSV instead.' });
+    return issues;
   }
   if (!skipLabels) {
     if (!observed.requestedLabel) issues.push({ code: 'GOAL_LABEL_REQUEST_MISSING', message: 'Goal requires shipping-label generation, but no label request was recorded.' });
@@ -2563,6 +2670,181 @@ class CdpPage {
     })()`);
     if (!target.ok) throw new Error(target.error);
     await wait(1500);
+  }
+
+  // goq-login.mjs の ensureGoqLogin が使う最小インターフェース
+  async fillSelector(selector, value) {
+    return this.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return { ok: false, error: 'not found: ' + ${JSON.stringify(selector)} };
+      el.focus();
+      el.value = ${JSON.stringify(String(value))};
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, length: el.value.length };
+    })()`);
+  }
+
+  async clickByText(text, { exact = true, tags = 'button, input[type="submit"], input[type="button"], a' } = {}) {
+    return this.eval(`(() => {
+      const norm = v => String(v || '').replace(/\\s+/g, '').trim();
+      const want = norm(${JSON.stringify(text)});
+      const els = Array.from(document.querySelectorAll(${JSON.stringify(tags)}));
+      const el = els.find(e => {
+        const label = norm(e.innerText || e.textContent || e.value || e.getAttribute('alt') || e.title);
+        return ${exact ? 'label === want' : 'label.includes(want)'};
+      });
+      if (!el) return { ok: false, error: 'not found by text: ' + ${JSON.stringify(text)} };
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      el.click();
+      return { ok: true, tag: el.tagName, text: (el.innerText || el.value || '').trim() };
+    })()`);
+  }
+
+  // ベニー様版: 送り状データ（B2クラウド形式）CSVを GoQ から出力して .o11y に保存する。
+  // 画面の「送り状データ出力」<select id="trader_s"> で B2クラウド形式を選び、隣の出力ボタン（name="B020"）を押す。
+  // ボタンは新しいウィンドウへフォーム送信するので、送信をフックして同じ内容を fetch で取り、ファイルに保存する。
+  async exportLabelCsvToFile(config) {
+    const previousDialogCount = run.javascriptDialogs?.length || 0;
+    const prepared = await this.eval(`(() => {
+      const select = document.querySelector('#trader_s');
+      if (!select) return { ok: false, error: '#trader_s (送り状データ出力の形式選択) not found' };
+      const options = Array.from(select.options).map(o => ({ value: o.value, text: o.textContent.trim() }));
+      const wantValue = ${JSON.stringify(B2_CSV_FORMAT_VALUE)};
+      const option = options.find(o => o.value === wantValue)
+        || options.find(o => ${B2_CSV_FORMAT_TEXT.toString()}.test(o.text) && !/e-?飛伝|ehiden|佐川/i.test(o.text + o.value));
+      if (!option) return { ok: false, error: 'B2 cloud csv format option not found', options };
+      select.value = option.value;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const checked = Array.from(document.getElementsByName('order_number[]')).filter(b => b.checked).map(b => b.value);
+      if (!checked.length) return { ok: false, error: 'no selected rows' };
+      const button = document.querySelector('button[name="B020"]') || (select.nextElementSibling?.tagName === 'BUTTON' ? select.nextElementSibling : document.querySelector('#trader_s + button'));
+      if (!button) return { ok: false, error: 'label csv output button not found' };
+
+      window.__goqLabelCsvCapture = { submits: [], opens: [], installedAt: new Date().toISOString() };
+      if (!window.__goqOrigFormSubmitForLabelCsv) window.__goqOrigFormSubmitForLabelCsv = HTMLFormElement.prototype.submit;
+      const serialize = form => {
+        const data = new URLSearchParams(new FormData(form));
+        return { action: form.action, method: (form.method || 'get').toUpperCase(), target: form.target || '', id: form.id || '', body: data.toString() };
+      };
+      HTMLFormElement.prototype.submit = function () {
+        window.__goqLabelCsvCapture.submits.push({ via: 'form.submit()', ...serialize(this) });
+        // 実際の送信（新しいウィンドウ）は行わない。fetch で同じ内容を取得する。
+      };
+      document.addEventListener('submit', event => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        window.__goqLabelCsvCapture.submits.push({ via: 'submit event', ...serialize(form) });
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, { capture: true, once: true });
+      if (!window.__goqOrigOpenForLabelCsv) window.__goqOrigOpenForLabelCsv = window.open;
+      window.open = function (url, name) {
+        window.__goqLabelCsvCapture.opens.push({ url: String(url || ''), name: String(name || '') });
+        return null;
+      };
+      button.scrollIntoView({ block: 'center', inline: 'center' });
+      const rect = button.getBoundingClientRect();
+      return {
+        ok: true,
+        option,
+        options,
+        checked,
+        buttonText: button.textContent.trim(),
+        clickPoint: { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) },
+      };
+    })()`);
+    if (!prepared.ok) throw new Error(`Label CSV export was not started: ${JSON.stringify(prepared)}`);
+
+    this.dialogContext = 'label-csv-export';
+    let capture;
+    try {
+      await this.click(prepared.clickPoint);
+      capture = await waitUntil(async () => {
+        const current = await this.eval('window.__goqLabelCsvCapture');
+        return current?.submits?.length ? current : null;
+      }, 8000, 250).catch(() => null);
+      if (!capture) {
+        // ボタンが submit を起こさなかった場合は、GoQ の downcsv() を直接呼ぶ（同じ選択・同じ形式）
+        const invoked = await this.eval(`(() => {
+          if (typeof window.downcsv !== 'function') return { ok: false, error: 'downcsv not defined' };
+          try { window.downcsv({ isTrusted: false }); } catch (error) { return { ok: false, error: String(error) }; }
+          return { ok: true };
+        })()`);
+        capture = await waitUntil(async () => {
+          const current = await this.eval('window.__goqLabelCsvCapture');
+          return current?.submits?.length ? current : null;
+        }, 5000, 250).catch(() => null);
+        if (!capture) throw new Error(`Label CSV export did not submit a form: ${JSON.stringify({ invoked, opens: (await this.eval('window.__goqLabelCsvCapture'))?.opens })}`);
+        capture.fallback = 'downcsv()';
+      }
+    } finally {
+      this.dialogContext = '';
+      await this.eval(`(() => {
+        if (window.__goqOrigFormSubmitForLabelCsv) HTMLFormElement.prototype.submit = window.__goqOrigFormSubmitForLabelCsv;
+        if (window.__goqOrigOpenForLabelCsv) window.open = window.__goqOrigOpenForLabelCsv;
+        return true;
+      })()`).catch(() => {});
+    }
+    const submit = capture.submits[capture.submits.length - 1];
+    const dialogs = (run.javascriptDialogs || []).slice(previousDialogCount);
+    const result = await this.eval(`(async () => {
+      const submit = ${JSON.stringify(submit)};
+      const init = { method: submit.method, credentials: 'same-origin' };
+      let url = submit.action;
+      if (submit.method === 'POST') {
+        init.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+        init.body = submit.body;
+      } else if (submit.body) {
+        url += (url.includes('?') ? '&' : '?') + submit.body;
+      }
+      const toBase64 = buffer => {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(binary);
+      };
+      let response = await fetch(url, init);
+      let type = response.headers.get('content-type') || '';
+      let disposition = response.headers.get('content-disposition') || '';
+      if (/text\\/html/i.test(type)) {
+        const html = await response.text();
+        const marker = 'infile.php?fname=';
+        const index = html.indexOf(marker);
+        if (index < 0) return { ok: false, step: 'export', status: response.status, type, html: html.slice(0, 600), url };
+        const fname = html.slice(index + marker.length).split('"')[0].split("'")[0].split(')')[0].trim();
+        response = await fetch('/goq21/infile.php?fname=' + encodeURIComponent(fname), { credentials: 'same-origin' });
+        type = response.headers.get('content-type') || '';
+        disposition = response.headers.get('content-disposition') || '';
+        const buffer = await response.arrayBuffer();
+        return { ok: response.ok, status: response.status, type, disposition, fname, url, base64: toBase64(buffer), size: buffer.byteLength };
+      }
+      const buffer = await response.arrayBuffer();
+      return { ok: response.ok, status: response.status, type, disposition, url, base64: toBase64(buffer), size: buffer.byteLength };
+    })()`);
+    if (!result.ok || !result.base64 || result.size < 1) {
+      throw new Error(`Label CSV export failed: ${JSON.stringify({ step: result.step, status: result.status, type: result.type, url: result.url, html: result.html, dialogs })}`);
+    }
+    if (!/csv|octet-stream|text\/plain|application\/download|vnd\.ms-excel/i.test(result.type)) {
+      throw new Error(`Label CSV export returned unexpected content type: ${JSON.stringify({ status: result.status, type: result.type, size: result.size, url: result.url })}`);
+    }
+    const outDir = path.join('.o11y', 'goq-unified-print-flow', 'downloads');
+    fs.mkdirSync(outDir, { recursive: true });
+    const filename = filenameFromDisposition(result.disposition) || safeBasename(result.fname) || `label-b2-${args.status}-${Date.now()}.csv`;
+    const fullName = path.resolve(outDir, filename);
+    fs.writeFileSync(fullName, Buffer.from(result.base64, 'base64'));
+    return {
+      fullName,
+      size: result.size,
+      format: prepared.option,
+      formatOptions: prepared.options,
+      checked: prepared.checked,
+      buttonText: prepared.buttonText,
+      submit: { via: submit.via, action: submit.action, method: submit.method, target: submit.target, fallback: capture.fallback || '' },
+      response: { status: result.status, type: result.type, disposition: result.disposition, url: result.url },
+      dialogs,
+    };
   }
 
   async exportPickingCsvToFile() {

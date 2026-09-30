@@ -1,9 +1,18 @@
 ---
 name: goq-shipping-label-print-flow
-description: GoQ System shipping workflow for sorting orders and issuing shipping labels. Use when Codex is asked to 仕分け GoQ orders, correct shipping statuses, check delivery date/time fields, or 印刷/刷って picking lists and delivery slips.
+description: ベニー様版 GoQ 出荷フロー（GoQログイン → ピッキングリストをローカル印刷 → B2クラウド用送り状CSVをGoQから出力 → ヤマトビジネスメンバーズで送り状印刷）。GoQ の仕分け、ステータス修正、日時指定チェック、「印刷して」「刷って」（ピッキングリスト・送り状）の依頼で使う。
 ---
 
-# GoQ Shipping Label Print Flow
+# GoQ Shipping Label Print Flow (Benny version)
+
+## Benny Flow Summary
+
+1. GoQ login (`tools/goq-login.mjs`, credentials from `.env`; the runner does this automatically).
+2. Picking list built locally from the Benny master sheet and printed to `普通紙` (`tools/local-picking/`).
+3. Shipping-label data exported from GoQ as a **B2 Cloud CSV** (`labelMode: b2-csv`), verified against the target snapshot, and written to a handoff file. GoQ's own B2 Cloud API button is not pressed for Yamato-family statuses.
+4. Yamato Business Members (B2 Cloud): import the CSV, print labels (`ヤマト` / `ネコポス`), export tracking numbers, import them into GoQ (`tools/yamato-b2/`).
+
+Runtime is local Node.js + Chrome started by `scripts\start-chrome-cdp.ps1`. Docker is not used.
 
 ## Keyword Semantics
 
@@ -26,13 +35,14 @@ Use this skill for GoQ送り状発行 and related picking-list printing. Treat t
 
 ## Required Reading
 
-Before changing or running the non-Sagawa-120 flow, read (paths relative to the goq-automation repository root):
+Before changing or running the non-Sagawa-120 flow, read (paths relative to the repository root):
 
 - `AGENTS.md`
 - `tools\goq-print-flow.README.md`
 - `tools\goq-print-flow.CHECKLIST.md`
 - `tools\goq-print-flow.mjs`
-- `%USERPROFILE%\.codex\memories\goq-print-flow-rules.md` (the runner loads this installed copy; the repository copy is `codex\memories\goq-print-flow-rules.md`)
+- `codex\memories\goq-print-flow-rules.md` (the runner loads this repository copy directly)
+- `tools\yamato-b2\README.md` for the Yamato Business Members side
 
 Sagawa labels for size 120+ may have a separate path; confirm the repository implementation before acting.
 
@@ -42,7 +52,8 @@ The runner must record loaded rule material in the run log before side effects. 
 
 Same-batch continuation rule: when one user request already completed the global sorting gate and the remaining work is continuing other statuses from that same sorted batch, use `--skip-sort-gate` on later reviewed-wrapper runs. Do not re-run global sorting before every carrier in the same batch unless the user asks for a fresh sort or live state invalidates the prior sorting log.
 
-0. For autonomous print work, use the reviewed Docker wrapper: `docker compose exec goq npm run goq:print -- --status <status> --port 9223 --execute`. Direct `node tools/goq-print-flow.mjs ...` execution is for debugging only because it does not enforce the post-run review gate.
+0. For autonomous print work, use the reviewed wrapper: `npm run goq:print -- --status <status> --execute` (Chrome on the port in `.env` `GOQ_CDP_PORT`, default 9223). Direct `node tools/goq-print-flow.mjs ...` execution is for debugging only because it does not enforce the post-run review gate.
+0-login. The runner first verifies the GoQ login state and logs in from `.env` when the login page is shown. If `.env` lacks `GOQ_*` keys, stop and ask the operator to fill `.env` (never type credentials in chat).
 0a. The executor must write `run.goal` before side effects. The reviewer must read that goal first, state it back in concrete terms, and judge the run against that declared objective before checking individual rule violations.
 0b. Before side effects, confirm the common-flow checklist in `tools/goq-print-flow.CHECKLIST.md`: required skill/entry point, address-warning gate, picking-before-label order, status-specific printer, label target snapshot, post-label issuance verification, and completion standard.
 0c. Before any print-side effect, complete global `仕分け`: `Amazon振分用`/`発送待ち` routing, all shipping-status delivery date/time checks, `佐川120サイズ以上` migration checks, and all-status address-warning resolution. A print run must not treat per-status cleanup as a substitute for this global sorting gate.
@@ -61,9 +72,21 @@ Same-batch continuation rule: when one user request already completed the global
 9. Treat any target row without a tracking number/label-issued marker after generation as `送り状未発行/除外された可能性あり`; parse any error report and map `配送管理番号` such as `183479-1` back to GoQ ID `183479` when available.
 10. Always report unissued label count and details. If a picking list was already printed, do not hide the mismatch; report whether correction/rerun is needed for only the affected rows.
 11. Fetch picking CSV from the GoQ CSV API and save it under `.o11y/goq-unified-print-flow/downloads/`; do not rely on the browser Downloads folder.
-12. Pass the saved CSV directly to Smart Pick.
-13. In Smart Pick, after CSV upload, click the `ピッキングリスト` tab and wait until the `印刷する` button appears.
-14. After execution, review the run log with `node tools/goq-run-review.mjs --latest` and do not report completion if the review finds a violation or an unaccepted warning. The reviewed wrapper performs this automatically and stores a report under `.o11y/goq-unified-print-flow/reviews/`.
+12. Build the picking-list PDF locally from that CSV and the Benny master sheet (`tools/local-picking/`). Do not use Smart Pick; it reads the original version's master.
+13. For Yamato-family statuses, export the B2 Cloud CSV instead of pressing the GoQ label button (see "B2 Cloud CSV Route" below), verify it against the target snapshot, and hand it off to the Yamato Business Members step.
+14. After execution, review the run log with `npm run goq:review` and do not report completion if the review finds a violation or an unaccepted warning. The reviewed wrapper performs this automatically and stores a report under `.o11y/goq-unified-print-flow/reviews/`.
+
+## B2 Cloud CSV Route
+
+Applies to `yamato`, `compact`, `nekoposu` (and their `-amazon` variants). `sagawa` / `hold-sagawa` keep the GoQ Smart API route.
+
+1. After the picking list is printed, reselect all visible rows, keep only targets, and re-verify today's ship date / empty tracking number.
+2. Record the label target snapshot (GoQ IDs, order numbers, status, carrier, ship date, request time).
+3. In the GoQ list footer, select the B2 Cloud format in the `送り状データ出力` select (`#trader_s`, option value `b2_cloud` by default; `.env` `GOQ_B2_CSV_FORMAT_VALUE` overrides) and press the output button (`name="B020"`). The runner hooks the form submission, fetches the same request, and saves the CSV (Shift_JIS) under `.o11y/goq-unified-print-flow/downloads/`.
+4. Verify the CSV: every target GoQ ID or order number appears in at least one data row, and no data row belongs to an order outside the snapshot. Multi-parcel duplicates of the same order are allowed. On mismatch, stop and report.
+5. Write the handoff file under `.o11y/goq-unified-print-flow/b2-handoff/` (`csv`, `targets`, `labelPrinter`, run log path) and record `exported shipping label csv`, `verified shipping label csv against target snapshot`, and `wrote b2 cloud handoff`.
+6. The Yamato Business Members side (`tools/yamato-b2/`) then logs in from `.env`, confirms the company name `合同会社Ｂｅｎｙ` on the home page, imports the CSV into B2 Cloud, checks the import result (count and error rows), prints the labels to the status printer with the same print-preview checks, exports issued tracking numbers, and imports them into GoQ `送り状番号取込`.
+7. The set is complete only when picking print, CSV verification, Yamato import/print, and GoQ tracking import/verification all pass. Report `送り状未発行/除外された可能性あり` for any target without a tracking number after the round trip.
 
 ## Label Generation Dialog Handling
 
@@ -74,6 +97,8 @@ Same-batch continuation rule: when one user request already completed the global
 - A run that continues after such a dialog is a review violation.
 
 ## Yamato B2 Cloud Request Evidence
+
+This section applies only to `goq-api` label mode (GoQ-side API generation). In the Benny version, Yamato-family statuses use the B2 Cloud CSV Route above, so these rules are not exercised for them.
 
 - For Yamato-family labels (`yamato`, `compact`, `nekoposu`), a successful GoQ request should put either a success PDF or an error report in the download file list within about one minute.
 - If the download file list does not show either success or error after the bounded reload window, treat the problem as "B2 Cloud request not sent" before assuming an address or carrier data error.
@@ -91,13 +116,13 @@ Same-batch continuation rule: when one user request already completed the global
 
 ## Printer Routing
 
-Use these destinations unless the user explicitly says otherwise:
+Use these destinations unless the user explicitly says otherwise. Printer names on this PC are `FUJIFILM Apeos C5240普通紙` / `FUJIFILM Apeos C5240ヤマト` / `FUJIFILM Apeos C5240佐川` / `FUJIFILM Apeos C5240ネコポス（手差し）`; matching is by substring and `.env` `PRINTER_*` overrides it.
 
 - Picking list: `普通紙`
 - Sagawa normal labels: `佐川`
 - Sagawa labels size 120+: `佐川`
-- Yamato Takkyubin labels: `ヤマト/コンパクト`
-- Takkyubin Compact labels: `ヤマト/コンパクト`
+- Yamato Takkyubin labels: `ヤマト`
+- Takkyubin Compact labels: `ヤマト`
 - Nekopos labels: `ネコポス`
 
 Amazon-specific handling: do not split or route Amazon orders differently unless the user explicitly requests Amazon-specific separation.
@@ -189,7 +214,7 @@ The old `--customer ... --tracking ...` mode is recovery-only for a single faile
 
 These are not shortcuts and must not change the required flow. Use them only to keep the required flow auditable when the browser, e-Hiden III, or GoQ behaves unexpectedly.
 
-- SmartClub/e-Hiden III login uses Windows Credential Manager target `GOQ_SMARTCLUB`. Read it through the real user PowerShell path, not the sandbox user's credential vault. If the current page is SmartClub `spastart.jsp` or the SmartClub menu, treat it as logged in; if e-Hiden III opens an auth redirect tab, run the same login helper again and verify the final page is e-Hiden III `/menu`.
+- SmartClub/e-Hiden III login credentials, if ever needed, go in `.env` like every other credential in this repository (Windows Credential Manager is not used). If the current page is SmartClub `spastart.jsp` or the SmartClub menu, treat it as logged in; if e-Hiden III opens an auth redirect tab, run the same login helper again and verify the final page is e-Hiden III `/menu`.
 - When exporting the GoQ e-Hiden III CSV, trusted-click coordinates must be recomputed after scrolling the output button into the viewport. If the click event log is empty or no `/export/ehiden_ver3.php` tab/download appears, the button was not actually pressed; do not continue to e-Hiden import until the CSV is verified to contain exactly the issued target GoQ IDs/customer-management numbers.
 - GoQ CSV downloads may not appear in the normal Downloads folder. If the browser download panel shows UUID-like 341-byte files, search the Playwright temp artifact folders for the most recent small file, verify its header/body contains the expected GoQ/e-Hiden CSV fields and target order, then copy it into the run workspace with a descriptive name.
 - If e-Hiden III CSV import returns `品名１ 桁溢れ`, do not register the import. Export the error CSV, shorten only the product-name columns for the affected target rows, keep order/customer/tracking fields unchanged, and reimport until the modal shows total N / normal N for the target batch.

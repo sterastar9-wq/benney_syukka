@@ -21,7 +21,7 @@ if (!flowArgs.length || flowArgs.includes('--help')) {
 const status = argValue(flowArgs, '--status') || 'sagawa';
 const beforeRuns = snapshotRuns();
 const env = { ...process.env };
-env.GOQ_CDP_HOST = await resolvedCdpHost(env.GOQ_CDP_HOST || 'host.docker.internal');
+env.GOQ_CDP_HOST = await resolvedCdpHost(env.GOQ_CDP_HOST || '127.0.0.1');
 
 console.log(`[goq-reviewed-run] CDP host: ${env.GOQ_CDP_HOST}`);
 console.log(`[goq-reviewed-run] flow: node tools/goq-print-flow.mjs ${flowArgs.join(' ')}`);

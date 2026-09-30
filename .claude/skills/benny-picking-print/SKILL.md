@@ -7,7 +7,7 @@ description: ベニー様用。GoQの注文データ（受注CSV）を読み込�
 
 GoQの注文CSVとマスタ（「ベニー様_ピッキング参照」の `GoQ全データ` タブ）から、Smart Pickと同じ集計・レイアウトのピッキングリストPDFを作り、印刷プレビューで設定を確認してから普通紙に印刷する。
 
-作業フォルダは `C:\Users\tatsu\OneDrive\ドキュメント\ベニーさま\goq-automation-benny`。コマンドはすべてここで実行する。仕組みの詳細は `tools/local-picking/README.md` にある。
+作業フォルダは `C:\Users\stera\Documents\BENNEY\benney_syukka`。コマンドはすべてここで実行する。仕組みの詳細は `tools/local-picking/README.md` にある。
 
 ## 守ること
 

@@ -1,9 +1,13 @@
 {
   "scripts": {
+    "goq:login": "node tools/goq-login.mjs",
     "goq:print": "node tools/goq-reviewed-run.mjs",
     "goq:review": "node tools/goq-run-review.mjs --latest",
-    "check": "node --check tools/goq-print-flow.mjs && node --check tools/goq-reviewed-run.mjs && node --check tools/goq-run-review.mjs && node --check tools/goq-print-picking-for-orders.mjs && node --check tools/lib/encoding.mjs && node --check tools/local-picking/picking-core.mjs && node --check tools/local-picking/render.mjs && node --check tools/local-picking/master-sheet.mjs && node --check tools/local-picking/pdf.mjs && node --check tools/local-picking/build.mjs && node --check tools/local-picking/make-picking-pdf.mjs && node --check tools/local-picking/print.mjs && node --check tools/local-picking/print-picking-pdf.mjs && node --check tools/local-picking/import-master.mjs && node tools/check-utf8-io.mjs && node tools/local-picking/selftest.mjs",
+    "yamato:login": "node tools/yamato-b2/login.mjs",
+    "yamato:survey": "node tools/yamato-b2/survey.mjs",
+    "check": "node --check tools/goq-print-flow.mjs && node --check tools/goq-reviewed-run.mjs && node --check tools/goq-run-review.mjs && node --check tools/goq-login.mjs && node --check tools/goq-print-picking-for-orders.mjs && node --check tools/lib/encoding.mjs && node --check tools/lib/env.mjs && node --check tools/lib/cdp.mjs && node --check tools/lib/printers.mjs && node --check tools/yamato-b2/login.mjs && node --check tools/yamato-b2/survey.mjs && node --check tools/local-picking/picking-core.mjs && node --check tools/local-picking/render.mjs && node --check tools/local-picking/master-sheet.mjs && node --check tools/local-picking/pdf.mjs && node --check tools/local-picking/build.mjs && node --check tools/local-picking/make-picking-pdf.mjs && node --check tools/local-picking/print.mjs && node --check tools/local-picking/print-picking-pdf.mjs && node --check tools/local-picking/import-master.mjs && node tools/check-utf8-io.mjs && node tools/local-picking/selftest.mjs && node tools/selftest-b2-csv.mjs",
     "test:picking": "node tools/local-picking/selftest.mjs",
+    "test:b2csv": "node tools/selftest-b2-csv.mjs",
     "picking:pdf": "node tools/local-picking/make-picking-pdf.mjs",
     "picking:print": "node tools/local-picking/print-picking-pdf.mjs",
     "picking:import-master": "node tools/local-picking/import-master.mjs"

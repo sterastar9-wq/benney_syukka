@@ -90,3 +90,8 @@ fix_goq_*.mjs
 
 # 元版のGitHub Actions（ベニー様用の設定前に自動実行させないため、pushしない）
 .github/workflows/
+
+credentials.json
+.env
+# .env の雛形は共有する（実体の .env は除外のまま）
+!.env.example

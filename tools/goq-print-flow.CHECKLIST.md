@@ -6,10 +6,11 @@ The executor must read this checklist before side effects. The reviewer must use
 
 ## Required Skill And Entry Point
 
-- Use skill: `goq-shipping-label-print-flow`.
-- Use Docker reviewed wrapper for autonomous operation:
-  - `docker compose exec goq npm run goq:print -- --status <status> --port 9223 --execute`
+- Use skill: `goq-shipping-label-print-flow` (`.claude/skills/goq-shipping-label-print-flow/SKILL.md`).
+- Use the reviewed wrapper for autonomous operation (local Node.js, no Docker):
+  - `npm run goq:print -- --status <status> --execute`
 - Use direct `node tools/goq-print-flow.mjs ...` only for debugging.
+- Credentials come from `.env` only. The runner verifies GoQ login first and logs in when needed.
 - The executor must record `run.goal` before side effects.
 - The reviewer must read `run.goal` first, restate the concrete status/date/scope/output goal, then judge the run against this checklist.
 
@@ -17,6 +18,7 @@ The executor must read this checklist before side effects. The reviewer must use
 
 1. Load required rule material: `AGENTS.md`, `tools/goq-print-flow.README.md`, `tools/goq-print-flow.CHECKLIST.md`, skill `SKILL.md`, and memory rules.
 2. Confirm the requested status key, GoQ status, date, optional order scope, optional exclusions, and optional store tab.
+2a. Verify the GoQ login state; if the login page is shown, log in from `.env` and record `goq login attempted` / `goq login state verified`.
 3. Enter GoQ and handle any dashboard notice modal before opening order rows.
 4. Set and verify GoQ list display count to `500件`.
 5. Read initial rows and record GoQ ID, order number, carrier, shipping date, tracking/label marker, and address-warning state.
@@ -37,8 +39,11 @@ The executor must read this checklist before side effects. The reviewer must use
 17. Print the picking list first to `普通紙`.
 18. On resume after a picking list was already printed for the same status/date/GoQ IDs, do not print the picking list again. Reuse the previous picking print evidence and continue only the unfinished label side.
 19. Inspect Chrome print preview before pressing print and record the actual destination.
-20. Before shipping-label generation, save the exact label target snapshot: GoQ IDs, order numbers, status, carrier, shipping date, and request time.
-21. Press the status-specific shipping-label generation button.
+20. Before shipping-label CSV export or generation, save the exact label target snapshot: GoQ IDs, order numbers, status, carrier, shipping date, and request time.
+20a. (Benny Yamato-family, `labelMode: b2-csv`) Select the B2 Cloud format in `#trader_s`, press the output button, and save the CSV. Record `exported shipping label csv`.
+20b. Verify the CSV against the target snapshot (every target present, no extra rows) and record `verified shipping label csv against target snapshot`. Stop on mismatch.
+20c. Write the handoff file for `tools/yamato-b2/` and record `wrote b2 cloud handoff`. Steps 21-28 below do not apply to b2-csv mode; label printing happens on the Yamato Business Members side with the same print-preview checks and printer routing.
+21. (goq-api mode) Press the status-specific shipping-label generation button.
 22. If a modal, alert, confirm, visible error, or error report appears, read and record the text. Do not continue blindly after closing it.
 22a. For Yamato-family statuses (`yamato`, `compact`, `nekoposu`), verify that the B2 Cloud generation click actually produced a `RequestB2CloudDeliveryInvoice.php` POST. If the download list does not show either success PDF or error report after the bounded reload window, treat it as "request not sent", not as an address error.
 22b. When the B2 Cloud POST is missing, record the monitor evidence and invoke the page-defined `b2CloudDeliveryInvoiceExportRequest('B2CloudGeneratePdfApi', 'b2_cloud_api_printStartLocation', 'ヤマト運輸', orderBySql)` once for the same selected GoQ IDs. Do not invoke it if the monitor already recorded a B2 Cloud POST.
@@ -53,13 +58,15 @@ The executor must read this checklist before side effects. The reviewer must use
 
 ## Status Differences
 
-| Status key | GoQ status | stat | Expected carrier | Label button | Label printer |
-| --- | --- | ---: | --- | --- | --- |
-| `sagawa` | 佐川 | 28 | 佐川急便 | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
-| `yamato` | ヤマト | 30 | ヤマト運輸 | `#B2CloudGeneratePdfApi` / ヤマト運輸送り状発行 | ヤマト/コンパクト |
-| `compact` | コンパクト | 29 | ヤマト運輸 コンパクト | `#B2CloudGeneratePdfApi` / ヤマト運輸送り状発行 | ヤマト/コンパクト |
-| `nekoposu` | ネコポス徳島 | 31 | ヤマト運輸 ネコポス | `#B2CloudGeneratePdfApi` / ヤマト運輸送り状発行 | ネコポス |
-| `hold-sagawa` | 保留（佐川想定） | 10 | 佐川急便 | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
+| Status key | GoQ status | stat | Expected carrier | Label mode | Label output | Label printer |
+| --- | --- | ---: | --- | --- | --- | --- |
+| `sagawa` | 佐川 | 28 | 佐川急便 | goq-api | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
+| `yamato` | ヤマト | 30 | ヤマト運輸 | b2-csv | `#trader_s` B2クラウド形式 → `B020` 出力 → ヤマトビジネスメンバーズ | ヤマト |
+| `compact` | コンパクト | 29 | ヤマト運輸 コンパクト | b2-csv | same as yamato | ヤマト |
+| `nekoposu` | ネコポス徳島 | 31 | ヤマト運輸 ネコポス | b2-csv | same as yamato | ネコポス |
+| `hold-sagawa` | 保留（佐川想定） | 10 | 佐川急便 | goq-api | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
+
+Printer names on this PC contain these strings (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`). `.env` `PRINTER_*` overrides them. The GoQ status IDs above come from the original version; confirm them against Benny's GoQ before the first execute run.
 
 Amazon-only variants are separate explicit status keys:
 
@@ -74,9 +81,9 @@ Base status keys must not implicitly apply the Amazon tab. Use an Amazon variant
 ## Status-Specific Warnings
 
 - Sagawa and hold-Sagawa use Smart API. The label card/resource may not behave like a normal browser download. Use only a resource/PDF tied to the current request, and parse error reports such as postal-code/address mismatch.
-- Yamato, Compact, and Nekopos use the Yamato B2 Cloud generation button. Dialogs and alerts must be recorded and treated as blockers unless the recorded text is a known non-blocking success notice.
-- Yamato, Compact, and Nekopos must record B2 Cloud request evidence. If a generation request is accepted by GoQ, the download file list should show either a success PDF or an error report within about one minute. After the bounded reload window, absence of both means the button click probably did not send the B2 Cloud request. In that case, use the monitored single fallback call to `b2CloudDeliveryInvoiceExportRequest(...)` and record the selected GoQ IDs, print-start location, `orderBySql`, and resulting success/error notice.
-- Nekopos labels must print to `ネコポス`, not `ヤマト/コンパクト`.
+- Yamato, Compact, and Nekopos (Benny version) export the B2 Cloud CSV; the GoQ B2 Cloud generation button is not pressed. Dialogs and alerts during CSV output must still be recorded, and a run that used `requested shipping label generation` in b2-csv mode is a review violation.
+- (goq-api mode only) Yamato-family labels generated through the GoQ API must record B2 Cloud request evidence (`RequestB2CloudDeliveryInvoice.php` POST); when it is missing, use the monitored single fallback call to `b2CloudDeliveryInvoiceExportRequest(...)`.
+- Nekopos labels must print to `ネコポス`, not `ヤマト`.
 - Sagawa labels must print to `佐川`, not a Yamato-family printer.
 - Picking lists always print to `普通紙` regardless of status.
 
@@ -87,8 +94,9 @@ The run is complete only when all of these are true:
 - `run.goal` exists and matches the requested operation.
 - Required rule material, including this checklist, was loaded before side effects.
 - Address warnings were fixed, confirmed, or memo-marked `住所不正` and excluded.
+- GoQ login state was verified (or auto-login succeeded).
 - Picking list output completed to `普通紙`.
-- Shipping-label generation target snapshot was recorded.
-- Label issuance was verified against the target snapshot.
-- Shipping labels printed to the correct status-specific destination.
+- Shipping-label target snapshot was recorded.
+- goq-api mode: label issuance was verified against the target snapshot and labels printed to the correct status-specific destination.
+- b2-csv mode: the exported CSV matched the target snapshot, the handoff file was written, and the Yamato Business Members side (import, print, tracking export, GoQ tracking import) completed.
 - Review reports no violations and no unaccepted warnings.

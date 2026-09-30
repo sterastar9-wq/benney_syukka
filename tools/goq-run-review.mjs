@@ -1,18 +1,13 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { PICKING_PRINTER, LABEL_PRINTER_BY_STATUS } from './lib/printers.mjs';
 
 const RUN_DIR = path.join('.o11y', 'goq-unified-print-flow', 'runs');
-const PICKING_PRINTER = '普通紙';
 // 元版のGoQ全データ（データ管理②）。ベニー様版のピッキングがこれを読んでいたら違反にする
 const ORIGINAL_GOQ_MASTER_SHEET_ID = '1V_y-3QNZ0DLLdAG9NSgdn4S-934hhRUcQgNVc7Pxc4I';
-const LABEL_PRINTER_BY_STATUS = {
-  sagawa: '佐川',
-  'hold-sagawa': '佐川',
-  yamato: 'ヤマト/コンパクト',
-  compact: 'ヤマト/コンパクト',
-  nekoposu: 'ネコポス',
-};
+// ベニー様版ヤマト系: GoQ から B2クラウド用CSVを出力し、ヤマトビジネスメンバーズで印刷する
+const LABEL_MODE_B2_CSV = 'b2-csv';
 
 const args = parseArgs(process.argv.slice(2));
 const file = args.latest ? latestRunFile() : args.file;
@@ -38,9 +33,25 @@ function reviewRun(run, file) {
   const downloadedLabel = hasStep('downloaded shipping label pdf') || hasStep('downloaded existing shipping label pdf');
   const downloadedExistingLabel = hasStep('downloaded existing shipping label pdf');
   const printedLabel = hasStep('printed shipping label') || hasStep('stopped before shipping label print button') || hasStep('printed existing shipping label');
+  const exportedLabelCsv = hasStep('exported shipping label csv');
 
-  for (const issue of collectGoalIssues(run, { printedPicking, requestedLabel, downloadedLabel, printedLabel, hasStep })) {
+  for (const issue of collectGoalIssues(run, { printedPicking, requestedLabel, downloadedLabel, printedLabel, exportedLabelCsv, hasStep })) {
     violations.push(issue);
+  }
+  if (exportedLabelCsv && !hasStep('recorded shipping-label target snapshot')) {
+    violations.push({ code: 'LABEL_TARGET_SNAPSHOT_MISSING', message: 'B2 Cloud CSV export occurred without recording the exact target snapshot.' });
+  }
+  if (exportedLabelCsv && !printedPicking && run.args?.['skip-picking'] !== true && !run.error) {
+    violations.push({ code: 'LABEL_BEFORE_PICKING', message: 'B2 Cloud CSV export occurred without a picking-list output step in the same run.' });
+  }
+  if (exportedLabelCsv && printedPicking && firstIndex('exported shipping label csv') < firstIndex('picking') && run.args?.['label-first'] !== true) {
+    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud CSV export occurred before picking-list output.' });
+  }
+  if (exportedLabelCsv && !hasStep('verified shipping label csv against target snapshot')) {
+    violations.push({ code: 'LABEL_CSV_NOT_VERIFIED', message: 'B2 Cloud CSV was exported without verification against the target snapshot.' });
+  }
+  if (run.labelIssuanceVerification?.mode === LABEL_MODE_B2_CSV && run.labelIssuanceVerification.unmatchedRows?.length) {
+    violations.push({ code: 'LABEL_CSV_EXTRA_ROWS', message: 'The exported B2 Cloud CSV contains rows that are not in the target snapshot.', rows: run.labelIssuanceVerification.unmatchedRows });
   }
 
   if (!run.ruleMaterial || run.ruleMaterial.ok !== true) {
@@ -52,7 +63,7 @@ function reviewRun(run, file) {
   }
 
   const unreviewedWarnings = collectUnreviewedAddressWarnings(run);
-  if (unreviewedWarnings.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unreviewedWarnings.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({
       code: 'ADDRESS_WARNING_REVIEW_BYPASS',
       message: 'Output flow continued while address warnings were not reviewed/fixed.',
@@ -61,7 +72,7 @@ function reviewRun(run, file) {
   }
 
   const excludedWarnings = collectManualExcludedAddressWarnings(run);
-  if (excludedWarnings.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (excludedWarnings.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({
       code: 'ADDRESS_WARNING_MANUAL_EXCLUDE_BYPASS',
       message: 'Address-warning rows were manually excluded without being marked fixed.',
@@ -70,7 +81,7 @@ function reviewRun(run, file) {
   }
 
   const unvalidatedFixedWarnings = collectUnvalidatedFixedAddressWarnings(run);
-  if (unvalidatedFixedWarnings.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unvalidatedFixedWarnings.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({
       code: 'ADDRESS_WARNING_UNVALIDATED_FIXED',
       message: 'Address-warning rows were treated as fixed even though no safe change or external validation was recorded.',
@@ -79,7 +90,7 @@ function reviewRun(run, file) {
   }
 
   const unresolvedWithoutMemo = collectUnresolvedAddressWarningsWithoutMemo(run);
-  if (unresolvedWithoutMemo.length && (printedPicking || requestedLabel || printedLabel)) {
+  if (unresolvedWithoutMemo.length && (printedPicking || requestedLabel || printedLabel || exportedLabelCsv)) {
     violations.push({
       code: 'ADDRESS_UNRESOLVED_MEMO_MISSING',
       message: 'Unresolved address-warning rows were excluded without a recorded one-line memo marker.',
@@ -213,6 +224,22 @@ function collectGoalIssues(run, observed) {
 
   if (!skipPicking && !observed.printedPicking && !previewOnlyPicking) {
     issues.push({ code: 'GOAL_PICKING_OUTPUT_MISSING', message: 'Goal requires a picking-list output, but no picking print/preview step was recorded.' });
+  }
+
+  if (!skipLabels && (run.labelMode || requested.labelMode) === LABEL_MODE_B2_CSV) {
+    if (!observed.exportedLabelCsv) {
+      issues.push({ code: 'GOAL_LABEL_CSV_EXPORT_MISSING', message: 'Goal requires the B2 Cloud shipping-label CSV export, but no export step was recorded.' });
+    }
+    if (!run.labelIssuanceVerification?.ok) {
+      issues.push({ code: 'GOAL_LABEL_CSV_NOT_VERIFIED', message: 'Goal requires the exported CSV to match the target snapshot, but verification is missing or failed.', detail: run.labelIssuanceVerification || null });
+    }
+    if (!observed.hasStep('wrote b2 cloud handoff')) {
+      issues.push({ code: 'GOAL_B2_HANDOFF_MISSING', message: 'Goal requires a B2 Cloud handoff file for the Yamato Business Members step, but none was written.' });
+    }
+    if (observed.requestedLabel || observed.downloadedLabel) {
+      issues.push({ code: 'GOQ_LABEL_API_USED_IN_B2_CSV_MODE', message: 'GoQ-side label generation was used although this status must export the B2 Cloud CSV instead.' });
+    }
+    return issues;
   }
 
   if (!skipLabels) {
