@@ -97,7 +97,7 @@ export function verifyLabelCsvText(text, targets, { encoding = 'unknown', file =
 }
 
 export function verifyLabelCsvFile(file, targets) {
-  const bytes = fs.readFileSync(file);
+  const bytes = fs.readFileSync(file /* Buffer: Shift_JIS のため utf8 指定しない */);
   const { text, encoding } = decodeCsvBuffer(bytes);
   return verifyLabelCsvText(text, targets, { encoding, file });
 }

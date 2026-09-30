@@ -25,64 +25,51 @@ const LABEL_MODE_B2_CSV = 'b2-csv';
 const B2_CSV_FORMAT_VALUE = process.env.GOQ_B2_CSV_FORMAT_VALUE || 'b2_cloud';
 const B2_CSV_FORMAT_TEXT = /B2|Ｂ２|ヤマト/;
 const B2_HANDOFF_DIR = path.join('.o11y', 'goq-unified-print-flow', 'b2-handoff');
+// ピッキング用CSV（カスタムCSV）の番号。ベニー様の GoQ では custom_id=1「カスタムCSV全項目(サンプル)」に
+// 商品名・個数・商品SKU・商品コード・JANコード・GoQ管理番号・送付先氏名・配送方法(複数配送先)・チェック項目 が揃っている（2026-09-30 確認）
+const PICKING_CSV_CUSTOM_ID = String(process.env.GOQ_PICKING_CSV_CUSTOM_ID || '1');
 
+// ベニー様の GoQ ステータス（2026-09-30 に実画面で確認。元版の 佐川28/ヤマト30/コンパクト29/ネコポス徳島31 とは別物）
+//   30 ★ネコポス・クリックポスト / 26 ★宅急便 / 27 ★クール便 / 29 ★発送済み / 32 ★出荷通知 / 17 メール待機 / 33 ★処理済み / 24 出荷日記入 / 3 発送前入金待ち / 6 発送後入金待ち
+// 配送業者の選択肢は 日本郵便 / ヤマト運輸 / 佐川急便。送り状はすべて B2クラウドCSV経路（GoQ の発行ボタンは使わない）。
 const STATUS = {
-  sagawa: {
-    label: '佐川',
-    stat: 28,
-    carrierText: '佐川急便',
-    labelMode: 'goq-api',
-    labelButton: '#smartAPI',
-    labelButtonText: '佐川急便送り状発行',
-    labelPrinter: LABEL_PRINTER_BY_STATUS.sagawa,
-  },
-  yamato: {
-    label: 'ヤマト',
+  nekoposu: {
+    label: '★ネコポス・クリックポスト',
     stat: 30,
     carrierText: 'ヤマト運輸',
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
     labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: LABEL_PRINTER_BY_STATUS.yamato,
-  },
-  compact: {
-    label: 'コンパクト',
-    stat: 29,
-    carrierText: 'ヤマト運輸 コンパクト',
-    labelMode: 'b2-csv',
-    labelCsvFormat: 'b2_cloud',
-    labelButton: '#B2CloudGeneratePdfApi',
-    labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: LABEL_PRINTER_BY_STATUS.compact,
-  },
-  nekoposu: {
-    label: 'ネコポス徳島',
-    stat: 31,
-    carrierText: 'ヤマト運輸 ネコポス',
-    labelMode: 'b2-csv',
-    labelCsvFormat: 'b2_cloud',
-    labelButton: '#B2CloudGeneratePdfApi',
-    labelButtonText: 'ヤマト運輸送り状発行',
     labelPrinter: LABEL_PRINTER_BY_STATUS.nekoposu,
   },
-  'hold-sagawa': {
-    label: '保留（佐川想定）',
-    stat: 10,
-    carrierText: '佐川急便',
-    labelMode: 'goq-api',
-    labelButton: '#smartAPI',
-    labelButtonText: '佐川急便送り状発行',
-    labelPrinter: LABEL_PRINTER_BY_STATUS['hold-sagawa'],
+  takkyubin: {
+    label: '★宅急便',
+    stat: 26,
+    carrierText: 'ヤマト運輸',
+    labelMode: 'b2-csv',
+    labelCsvFormat: 'b2_cloud',
+    labelButton: '#B2CloudGeneratePdfApi',
+    labelButtonText: 'ヤマト運輸送り状発行',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.takkyubin,
+  },
+  cool: {
+    label: '★クール便',
+    stat: 27,
+    carrierText: 'ヤマト運輸',
+    labelMode: 'b2-csv',
+    labelCsvFormat: 'b2_cloud',
+    labelButton: '#B2CloudGeneratePdfApi',
+    labelButtonText: 'ヤマト運輸送り状発行',
+    labelPrinter: LABEL_PRINTER_BY_STATUS.cool,
   },
 };
 
+// ベニー様の GoQ には店舗タブ（#st）が無いため、Amazon 限定キーは通常使わない（互換のため残す）
 const AMAZON_STATUS_ALIASES = new Map([
-  ['sagawa-amazon', 'sagawa'],
-  ['yamato-amazon', 'yamato'],
-  ['compact-amazon', 'compact'],
   ['nekoposu-amazon', 'nekoposu'],
-  ['hold-sagawa-amazon', 'hold-sagawa'],
+  ['takkyubin-amazon', 'takkyubin'],
+  ['cool-amazon', 'cool'],
 ]);
 
 const GOQ_ORIGIN = 'https://order.goqsystem.com';
@@ -2658,7 +2645,7 @@ class CdpPage {
     const target = await this.eval(`(() => {
       const select = document.querySelector('#trader_s3');
       if (!select) return { ok: false, error: '#trader_s3 not found' };
-      select.value = 'customize_csv_6';
+      select.value = 'customize_csv_${PICKING_CSV_CUSTOM_ID}';
       select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
       const button = document.querySelector('#trader_s3 + button');
@@ -2851,7 +2838,7 @@ class CdpPage {
     const result = await this.eval(`(async () => {
       const select = document.querySelector('#trader_s3');
       if (!select) return { ok: false, error: '#trader_s3 not found' };
-      select.value = 'customize_csv_6';
+      select.value = 'customize_csv_${PICKING_CSV_CUSTOM_ID}';
       select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
 
@@ -2861,13 +2848,13 @@ class CdpPage {
       const form = document.querySelector('#pro_form') || select.closest('form') || document.querySelector('form');
       if (!form) return { ok: false, error: 'export form not found' };
       const data = new URLSearchParams(new FormData(form));
-      data.set('trader_s3', 'customize_csv_6');
+      data.set('trader_s3', 'customize_csv_${PICKING_CSV_CUSTOM_ID}');
       const existingOrderIds = new Set(data.getAll('order_number[]'));
       for (const id of checked) {
         if (!existingOrderIds.has(id)) data.append('order_number[]', id);
       }
 
-      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=6', {
+      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=${PICKING_CSV_CUSTOM_ID}', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

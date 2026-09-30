@@ -63,7 +63,7 @@ node tools/goq-print-flow.mjs --status yamato
 npm run goq:print -- --status yamato --execute
 ```
 
-ヤマト系（`yamato` / `compact` / `nekoposu`）ではここまでで「ピッキングリスト印刷 → B2クラウド用CSV出力 → 突合 → 引き継ぎファイル」が終わります。続きはヤマト側です。
+ここまでで「ピッキングリスト印刷 → B2クラウド用CSV出力 → 突合 → 引き継ぎファイル」が終わります。続きはヤマト側です。
 
 ```powershell
 npm run yamato:login      # .env でログインし、ホームに「合同会社Ｂｅｎｙ」が出ることを確認
@@ -71,15 +71,13 @@ npm run yamato:survey     # 画面構造を .o11y/yamato-b2/survey/ に記録（
 # 取込・印刷（走査後に実装）: node tools/yamato-b2/import-and-print.mjs --handoff <引き継ぎファイル>
 ```
 
-| `--status` | GoQ ステータス | 送り状の出し方 | 送り状プリンタ |
-| --- | --- | --- | --- |
-| `yamato` | ヤマト | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
-| `compact` | コンパクト | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
-| `nekoposu` | ネコポス徳島 | B2クラウドCSV → ヤマトビジネスメンバーズ | ネコポス |
-| `sagawa` | 佐川 | GoQ の佐川 Smart API（元版のまま） | 佐川 |
-| `hold-sagawa` | 保留（佐川想定） | GoQ の佐川 Smart API（元版のまま） | 佐川 |
+| `--status` | GoQ ステータス（stat） | 対象の配送業者 | 送り状の出し方 | 送り状プリンタ |
+| --- | --- | --- | --- | --- |
+| `nekoposu` | ★ネコポス・クリックポスト（30） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ネコポス |
+| `takkyubin` | ★宅急便（26） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
+| `cool` | ★クール便（27） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
 
-Amazon 注文だけを対象にする場合は `yamato-amazon` のように `-amazon` を付けます。
+ベニー様の通常運用は `nekoposu`（★ネコポス・クリックポスト）です。配送業者が `日本郵便`（クリックポスト）の行は B2クラウドの対象外なので、対象から除外されて実行ログに `carrier mismatch` として残ります。
 
 よく使うオプション：
 

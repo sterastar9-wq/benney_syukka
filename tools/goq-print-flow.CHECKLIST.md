@@ -58,23 +58,21 @@ The executor must read this checklist before side effects. The reviewer must use
 
 ## Status Differences
 
+Benny's GoQ statuses (verified on the live system on 2026-09-30):
+
 | Status key | GoQ status | stat | Expected carrier | Label mode | Label output | Label printer |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `sagawa` | 佐川 | 28 | 佐川急便 | goq-api | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
-| `yamato` | ヤマト | 30 | ヤマト運輸 | b2-csv | `#trader_s` B2クラウド形式 → `B020` 出力 → ヤマトビジネスメンバーズ | ヤマト |
-| `compact` | コンパクト | 29 | ヤマト運輸 コンパクト | b2-csv | same as yamato | ヤマト |
-| `nekoposu` | ネコポス徳島 | 31 | ヤマト運輸 ネコポス | b2-csv | same as yamato | ネコポス |
-| `hold-sagawa` | 保留（佐川想定） | 10 | 佐川急便 | goq-api | `#smartAPI` / 佐川急便送り状発行 | 佐川 |
+| `nekoposu` | ★ネコポス・クリックポスト | 30 | ヤマト運輸 (ネコポス) | b2-csv | `#trader_s` = `b2_cloud` (B2クラウド) → `B020` 出力 → ヤマトビジネスメンバーズ | ネコポス |
+| `takkyubin` | ★宅急便 | 26 | ヤマト運輸 | b2-csv | same | ヤマト |
+| `cool` | ★クール便 | 27 | ヤマト運輸 | b2-csv | same | ヤマト |
 
-Printer names on this PC contain these strings (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`). `.env` `PRINTER_*` overrides them. The GoQ status IDs above come from the original version; confirm them against Benny's GoQ before the first execute run.
+Other statuses on Benny's GoQ (not print targets): 29 ★発送済み, 32 ★出荷通知, 17 メール待機, 33 ★処理済み, 24 出荷日記入, 3 発送前入金待ち, 6 発送後入金待ち. Carrier options are 日本郵便 / ヤマト運輸 / 佐川急便. Rows whose carrier is `日本郵便` (クリックポスト) are excluded as `carrier mismatch`.
 
-Amazon-only variants are separate explicit status keys:
+Picking CSV is custom CSV id 1 (`カスタムCSV全項目(サンプル)`), which contains 商品名 / 個数 / 商品SKU / 商品コード / JANコード / GoQ管理番号 / 送付先氏名 / 配送方法(複数配送先) / チェック項目. Override with `.env` `GOQ_PICKING_CSV_CUSTOM_ID`.
 
-- `sagawa-amazon`
-- `yamato-amazon`
-- `compact-amazon`
-- `nekoposu-amazon`
-- `hold-sagawa-amazon`
+Printer names on this PC contain these strings (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`). `.env` `PRINTER_*` overrides them.
+
+Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`, `cool-amazon`) exist for compatibility only; Benny's GoQ has no store tab (`#st`).
 
 Base status keys must not implicitly apply the Amazon tab. Use an Amazon variant, `--amazon-only`, or explicit `--store-tab "Amazon"` only when requested.
 

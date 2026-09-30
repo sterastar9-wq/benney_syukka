@@ -1,4 +1,4 @@
-# GoQ / ヤマトビジネスメンバーズ 自動化用の Chrome を、リモートデバッグ付きで起動する。
+﻿# GoQ / ヤマトビジネスメンバーズ 自動化用の Chrome を、リモートデバッグ付きで起動する。
 # 普段使いの Chrome プロファイルとは分けるため、リポジトリ直下の .chrome-goq を使う（Git には入らない）。
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\start-chrome-cdp.ps1            # ポート 9223
@@ -31,7 +31,7 @@ try {
 }
 
 New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
-$args = @(
+$chromeArgs = @(
     "--remote-debugging-port=$Port",
     "--user-data-dir=$ProfileDir",
     "--no-first-run",
@@ -40,7 +40,7 @@ $args = @(
     "--lang=ja",
     $Url
 )
-Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
+Start-Process -FilePath $chrome -ArgumentList $chromeArgs | Out-Null
 
 $deadline = (Get-Date).AddSeconds(20)
 while ((Get-Date) -lt $deadline) {

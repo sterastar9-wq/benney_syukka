@@ -9,12 +9,11 @@ loadEnv();
 
 export const PICKING_PRINTER = process.env.PRINTER_PICKING || '普通紙';
 
+// キーはベニー様の GoQ ステータス（tools/goq-print-flow.mjs の STATUS と同じ）
 export const LABEL_PRINTER_BY_STATUS = Object.freeze({
-  sagawa: process.env.PRINTER_SAGAWA || '佐川',
-  'hold-sagawa': process.env.PRINTER_SAGAWA || '佐川',
-  yamato: process.env.PRINTER_YAMATO || 'ヤマト',
-  compact: process.env.PRINTER_YAMATO || 'ヤマト',
-  nekoposu: process.env.PRINTER_NEKOPOSU || 'ネコポス',
+  nekoposu: process.env.PRINTER_NEKOPOSU || 'ネコポス',   // ★ネコポス・クリックポスト
+  takkyubin: process.env.PRINTER_YAMATO || 'ヤマト',      // ★宅急便
+  cool: process.env.PRINTER_YAMATO || 'ヤマト',           // ★クール便
 });
 
 export function labelPrinterForStatus(statusKey) {

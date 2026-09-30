@@ -149,7 +149,18 @@ export async function ensureYamatoLogin(page, { step = () => {}, allowLogin = tr
     company = await verifyCompanyOnPage(page);
   }
   const finalState = await readYamatoLoginState(page);
-  record.final = { url: finalState.url, title: finalState.title, isLoginPage: finalState.isLoginPage, hasLogout: finalState.hasLogout, textHead: finalState.textHead };
+  // ログイン失敗時のURLにはお客様コードがクエリで入るため、記録・エラー文にはパスとエラーコードだけ残す
+  const finalUrl = (() => {
+    try {
+      const u = new URL(finalState.url);
+      const err = [u.searchParams.get('errCode'), u.searchParams.get('exceptionCode')].filter(Boolean).join('/');
+      return `${u.origin}${u.pathname}${err ? `?err=${err}` : ''}`;
+    } catch {
+      return String(finalState.url || '').split('?')[0];
+    }
+  })();
+  const loginError = (finalState.textHead.match(/ログイン情報が正しくありません|ロック|利用可能時間|仮パスワード[^。]*。/) || [])[0] || '';
+  record.final = { url: finalUrl, title: finalState.title, isLoginPage: finalState.isLoginPage, hasLogout: finalState.hasLogout, loginError };
   record.company = company;
   record.result = !finalState.isLoginPage && company.ok ? 'logged-in' : 'failed';
   step('yamato login attempted', { result: record.result, url: finalState.url, companyVerified: company.ok });
@@ -181,7 +192,7 @@ async function main() {
     out.error = error.message;
   } finally {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    fs.writeFileSync(path.join(LOG_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`), `${JSON.stringify(out, null, 2)}\n`);
+    fs.writeFileSync(path.join(LOG_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`), `${JSON.stringify(out, null, 2)}\n`, 'utf8');
     page.close();
   }
   console.log(JSON.stringify(out, null, 2));

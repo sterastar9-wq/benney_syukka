@@ -11,7 +11,7 @@
 
 ## B2 Cloud CSV Route (Benny Yamato-family)
 
-- `yamato`, `compact`, and `nekoposu` use `labelMode: b2-csv`. The GoQ B2 Cloud API button (`#B2CloudGeneratePdfApi`) is never pressed for these statuses.
+- Benny's statuses are `nekoposu` (★ネコポス・クリックポスト, stat 30), `takkyubin` (★宅急便, 26), and `cool` (★クール便, 27); all use `labelMode: b2-csv`. The GoQ B2 Cloud API button (`#B2CloudGeneratePdfApi`) is never pressed. Rows with carrier `日本郵便` are excluded as carrier mismatch. Picking CSV is custom id 1.
 - After the picking list is printed and rows are reselected/verified, the runner records the label target snapshot, selects the B2 Cloud format in `#trader_s`, hooks the output form submission, and fetches the same request to save the CSV under `.o11y/goq-unified-print-flow/downloads/`.
 - The CSV (Shift_JIS) is verified row by row against the target snapshot: every target GoQ ID/order number must appear, and no row outside the snapshot may exist. Otherwise the run stops.
 - On success the runner writes a handoff file under `.o11y/goq-unified-print-flow/b2-handoff/` and records `exported shipping label csv`, `verified shipping label csv against target snapshot`, and `wrote b2 cloud handoff`.

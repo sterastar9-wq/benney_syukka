@@ -43,6 +43,24 @@ export async function readGoqLoginState(page) {
   })()`);
 }
 
+// 入力欄を含むフォームの送信ボタンを押す。ヘッダーにも「ログイン」リンクがあるため、テキストだけで探さない。
+async function submitFormOf(page, fieldSelector, fallbackText) {
+  return page.eval(`(() => {
+    const norm = v => String(v || '').replace(/\\s+/g, '').trim();
+    const field = document.querySelector(${JSON.stringify(fieldSelector)});
+    const form = field?.closest('form');
+    if (!form) return { ok: false, error: 'form not found for ' + ${JSON.stringify(fieldSelector)} };
+    const candidates = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]'));
+    const button = candidates.find(el => norm(el.innerText || el.value) === norm(${JSON.stringify(fallbackText)}))
+      || candidates.find(el => el.type === 'submit')
+      || candidates[0];
+    if (!button) return { ok: false, error: 'submit button not found in form of ' + ${JSON.stringify(fieldSelector)} };
+    button.scrollIntoView({ block: 'center', inline: 'center' });
+    button.click();
+    return { ok: true, text: norm(button.innerText || button.value), type: button.type || '' };
+  })()`);
+}
+
 // ログイン済みでなければ .env の情報でログインする。戻り値はパスワードを含まない記録。
 export async function ensureGoqLogin(page, { step = () => {}, allowLogin = true } = {}) {
   loadEnv();
@@ -69,7 +87,7 @@ export async function ensureGoqLogin(page, { step = () => {}, allowLogin = true 
     const id = await page.fillSelector('#login_id', env.GOQ_USER_ID);
     const pw = await page.fillSelector('#login_pw', env.GOQ_PASSWORD);
     if (!id.ok || !pw.ok) throw new Error(`GoQ login step1 fields not found: ${JSON.stringify({ id, pw: { ok: pw.ok } })}`);
-    const clicked = await page.clickByText('認証する');
+    const clicked = await submitFormOf(page, '#login_id', '認証する');
     if (!clicked.ok) throw new Error(`GoQ login step1 button not found: ${clicked.error}`);
     record.actions.push({ action: 'step1 submitted', idLength: id.length });
     await wait(2500);
@@ -79,7 +97,7 @@ export async function ensureGoqLogin(page, { step = () => {}, allowLogin = true 
     const id = await page.fillSelector('#seq_id', env.GOQ_SEQ_ID);
     const pw = await page.fillSelector('#seq_pw', env.GOQ_SEQ_PW);
     if (!id.ok || !pw.ok) throw new Error(`GoQ login step2 fields not found: ${JSON.stringify({ id, pw: { ok: pw.ok } })}`);
-    const clicked = await page.clickByText('ログイン');
+    const clicked = await submitFormOf(page, '#seq_id', 'ログイン');
     if (!clicked.ok) throw new Error(`GoQ login step2 button not found: ${clicked.error}`);
     record.actions.push({ action: 'step2 submitted', idLength: id.length });
     await wait(3000);
@@ -128,7 +146,7 @@ async function main() {
     out.error = error.message;
   } finally {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    fs.writeFileSync(path.join(LOG_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`), `${JSON.stringify(out, null, 2)}\n`);
+    fs.writeFileSync(path.join(LOG_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`), `${JSON.stringify(out, null, 2)}\n`, 'utf8');
     page.close();
   }
   console.log(JSON.stringify(out, null, 2));

@@ -125,7 +125,7 @@ async function main() {
     const entry = { ...item, ...described, dialogs: page.dialogs.splice(0) };
     if (screenshots) entry.screenshot = await page.screenshot(path.join(outDir, `page-${pages.length + 1}.png`));
     pages.push(entry);
-    fs.writeFileSync(path.join(outDir, `page-${pages.length}.json`), `${JSON.stringify(entry, null, 2)}\n`);
+    fs.writeFileSync(path.join(outDir, `page-${pages.length}.json`), `${JSON.stringify(entry, null, 2)}\n`, 'utf8');
     if (item.depth >= maxDepth) continue;
     for (const link of described.links) {
       if (!link.href || !isCrawlableHost(link.href)) continue;
@@ -153,9 +153,9 @@ async function main() {
     pages: pages.map(p => ({ url: p.url, title: p.title, depth: p.depth, headings: p.headings?.slice(0, 5), forms: p.forms?.length || 0, buttons: p.buttons?.length || 0, links: p.links?.length || 0, frames: p.frames?.length || 0, error: p.error })),
     skipped,
   };
-  fs.writeFileSync(path.join(outDir, 'pages.json'), `${JSON.stringify(pages, null, 2)}\n`);
-  fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
-  fs.writeFileSync(path.join(outDir, 'summary.md'), renderMarkdown(summary, pages));
+  fs.writeFileSync(path.join(outDir, 'pages.json'), `${JSON.stringify(pages, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(path.join(outDir, 'summary.md'), renderMarkdown(summary, pages), 'utf8');
   console.log(JSON.stringify({ ok: true, outDir, pageCount: pages.length, company, skipped: skipped.length }, null, 2));
 }
 

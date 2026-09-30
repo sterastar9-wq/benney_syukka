@@ -78,7 +78,7 @@ Same-batch continuation rule: when one user request already completed the global
 
 ## B2 Cloud CSV Route
 
-Applies to `yamato`, `compact`, `nekoposu` (and their `-amazon` variants). `sagawa` / `hold-sagawa` keep the GoQ Smart API route.
+Applies to all Benny statuses: `nekoposu` (★ネコポス・クリックポスト, stat 30, printer `ネコポス`), `takkyubin` (★宅急便, 26, `ヤマト`), `cool` (★クール便, 27, `ヤマト`). Expected carrier is `ヤマト運輸`; `日本郵便` (クリックポスト) rows are excluded as carrier mismatch. Picking CSV is GoQ custom CSV id 1.
 
 1. After the picking list is printed, reselect all visible rows, keep only targets, and re-verify today's ship date / empty tracking number.
 2. Record the label target snapshot (GoQ IDs, order numbers, status, carrier, ship date, request time).

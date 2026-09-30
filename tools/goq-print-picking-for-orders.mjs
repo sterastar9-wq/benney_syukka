@@ -4,6 +4,11 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import { cdpHttpUrl, cdpWebSocketUrl, fileUrlForBrowser } from './cdp-connection.mjs';
 import { buildLocalPickingPdf } from './local-picking/build.mjs';
+import { loadEnv } from './lib/env.mjs';
+
+loadEnv();
+// ピッキング用カスタムCSVの番号（ベニー様は 1）。tools/goq-print-flow.mjs と同じ
+const PICKING_CSV_CUSTOM_ID = String(process.env.GOQ_PICKING_CSV_CUSTOM_ID || '1');
 
 const port = Number(process.argv[2] || 9223);
 const status = Number(process.argv[3] || 31);
@@ -117,7 +122,7 @@ class CdpPage {
     const result = await this.eval(`(async () => {
       const select = document.querySelector('#trader_s3');
       if (!select) return { ok: false, error: '#trader_s3 not found' };
-      select.value = 'customize_csv_6';
+      select.value = 'customize_csv_${PICKING_CSV_CUSTOM_ID}';
       select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
       const checked = Array.from(document.querySelectorAll('input[name="order_number[]"]')).filter(b => b.checked).map(b => b.value);
@@ -125,12 +130,12 @@ class CdpPage {
       const form = document.querySelector('#pro_form') || select.closest('form') || document.querySelector('form');
       if (!form) return { ok: false, error: 'export form not found' };
       const data = new URLSearchParams(new FormData(form));
-      data.set('trader_s3', 'customize_csv_6');
+      data.set('trader_s3', 'customize_csv_${PICKING_CSV_CUSTOM_ID}');
       const existing = new Set(data.getAll('order_number[]'));
       for (const id of checked) {
         if (!existing.has(id)) data.append('order_number[]', id);
       }
-      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=6', {
+      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=${PICKING_CSV_CUSTOM_ID}', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -161,9 +166,9 @@ class CdpPage {
     const result = await this.eval(`(async () => {
       const ids = ${JSON.stringify(ids)};
       const data = new URLSearchParams();
-      data.set('trader_s3', 'customize_csv_6');
+      data.set('trader_s3', 'customize_csv_${PICKING_CSV_CUSTOM_ID}');
       for (const id of ids) data.append('order_number[]', id);
-      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=6', {
+      const createResponse = await fetch('/goq21/export/create_custom_csv.php?custom_id=${PICKING_CSV_CUSTOM_ID}', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

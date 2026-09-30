@@ -8,7 +8,7 @@ Benny's flow: GoQ login → local picking-list print → **B2 Cloud CSV export f
 
 ## B2 Cloud CSV Route
 
-Yamato-family statuses (`yamato`, `compact`, `nekoposu`, and their `-amazon` variants) have `labelMode: 'b2-csv'` in `STATUS`. For them the runner does **not** press `#B2CloudGeneratePdfApi`. Instead, inside `outputLabels()`:
+All Benny statuses (`nekoposu`, `takkyubin`, `cool`, and their `-amazon` variants) have `labelMode: 'b2-csv'` in `STATUS`. For them the runner does **not** press `#B2CloudGeneratePdfApi`. Instead, inside `outputLabels()`:
 
 1. Reselect all visible rows, keep only targets, and re-verify today's ship date / empty tracking number (same as before).
 2. Record the label target snapshot (`recorded shipping-label target snapshot`).
@@ -32,23 +32,19 @@ Before anything else the runner calls `ensureGoqLogin()` from `tools/goq-login.m
 
 ## Supported Statuses
 
-| Key | GoQ status | Expected carrier | Label mode | Label printer |
-| --- | --- | --- | --- | --- |
-| `sagawa` | 佐川 | 佐川急便 | goq-api (佐川急便送り状発行) | 佐川 |
-| `yamato` | ヤマト | ヤマト運輸 | b2-csv | ヤマト |
-| `compact` | コンパクト | ヤマト運輸 コンパクト | b2-csv | ヤマト |
-| `nekoposu` | ネコポス徳島 | ヤマト運輸 ネコポス | b2-csv | ネコポス |
-| `hold-sagawa` | 保留（佐川想定） | 佐川急便 | goq-api (佐川急便送り状発行) | 佐川 |
+Benny's GoQ (verified 2026-09-30):
+
+| Key | GoQ status | stat | Expected carrier | Label mode | Label printer |
+| --- | --- | ---: | --- | --- | --- |
+| `nekoposu` | ★ネコポス・クリックポスト | 30 | ヤマト運輸 | b2-csv | ネコポス |
+| `takkyubin` | ★宅急便 | 26 | ヤマト運輸 | b2-csv | ヤマト |
+| `cool` | ★クール便 | 27 | ヤマト運輸 | b2-csv | ヤマト |
+
+`日本郵便` (クリックポスト) rows are excluded as carrier mismatch. Picking CSV uses custom id 1 (`GOQ_PICKING_CSV_CUSTOM_ID`). The `goq-api` label mode (Sagawa Smart API, original version) remains in the code but no Benny status uses it.
 
 Printer strings are substrings of this PC's printer names (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`) and can be overridden with `.env` `PRINTER_PICKING` / `PRINTER_YAMATO` / `PRINTER_NEKOPOSU` / `PRINTER_SAGAWA` (`tools/lib/printers.mjs`).
 
-Amazon-only variants are explicit separate status keys:
-
-- `sagawa-amazon`
-- `yamato-amazon`
-- `compact-amazon`
-- `nekoposu-amazon`
-- `hold-sagawa-amazon`
+Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`, `cool-amazon`) exist for compatibility only; Benny's GoQ has no store tab.
 
 The base status keys never apply the Amazon tab unless `--amazon-only` or `--store-tab` is explicitly supplied.
 
