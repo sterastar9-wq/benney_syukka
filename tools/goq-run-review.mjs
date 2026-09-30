@@ -272,6 +272,16 @@ function collectLocalPickingIssues(steps) {
     }
     if (!/printed picking list|verified picking print preview without pressing print/.test(name)) return;
     const detail = step.detail || {};
+    if (detail.source === 'goq-report') {
+      // ベニー様の手順書どおり、GoQ の帳票「商品リスト（数量順）」（print_type 16）を印刷した場合
+      const created = steps.slice(0, index).reverse().find(item => item.name === 'created goq product list report' && item.detail?.file === detail.pdf);
+      if (!detail.pdf || !created) {
+        violations.push({ code: 'GOQ_REPORT_NOT_RECORDED', message: '印刷したピッキングPDFの作成記録（created goq product list report）がありません。', step });
+      } else if (String(created.detail.printType) !== '16') {
+        violations.push({ code: 'GOQ_REPORT_WRONG_TYPE', message: `ピッキングリストの帳票種別が「商品リスト（数量順）」(16) ではありません: ${created.detail.printType}`, step });
+      }
+      return;
+    }
     if (detail.source !== 'local-picking-pdf' || !detail.pdf) {
       violations.push({ code: 'PICKING_NOT_FROM_LOCAL_PDF', message: 'ピッキング印刷がローカルで作成したPDFからではありません。', step });
       return;

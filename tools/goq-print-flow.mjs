@@ -161,6 +161,7 @@ async function main() {
     stat: config.stat,
     labelMode: config.labelMode || LABEL_MODE_GOQ_API,
     labelPrinter: config.labelPrinter,
+    pickingMode: args['picking-mode'] || process.env.GOQ_PICKING_MODE || config.pickingMode || 'local-picking-pdf',
     date: today,
     onlyOrder,
     excludeOrders: [...excludeOrders],
@@ -448,6 +449,35 @@ async function main() {
 
   let deferredPickingCsv = null;
   const outputPicking = async () => {
+  if (!skipPicking && (args['picking-mode'] || process.env.GOQ_PICKING_MODE || config.pickingMode || 'local-picking-pdf') === 'goq-report') {
+    // ベニー様の手順書（手順24〜26）: 処理パネルの帳票作成で「商品リスト（数量順）」を作成し、A4・白黒で普通紙に印刷する。
+    // マスタシート（ベニー様_ピッキング参照）は使わない。
+    const report = await goq.createProductListReportPdf(config.pickingReportType || '16');
+    step('created goq product list report', { file: report.fullName, bytes: report.size, printType: report.printType, printTypeText: report.printTypeText, checked: report.checked, action: report.action });
+    if (!skipPrint) {
+      const pickingPdf = await openPdfInNewTab(port, report.fullName);
+      let pickingPreview;
+      try {
+        await pickingPdf.viewer.enable();
+        pickingPreview = await pickingPdf.viewer.printPdf(PICKING_PRINTER, { press: !previewOnlyPicking, closeWithoutPrinting: previewOnlyPicking });
+      } finally {
+        await pickingPdf.close();
+      }
+      step(previewOnlyPicking ? 'verified picking print preview without pressing print' : 'printed picking list', {
+        printer: PICKING_PRINTER,
+        destination: pickingPreview.destination,
+        expectedPrinter: PICKING_PRINTER,
+        screenshot: pickingPreview.screenshotPath,
+        pages: pickingPreview.pages,
+        color: '白黒',
+        duplex: false,
+        source: 'goq-report',
+        pdf: report.fullName,
+        printType: report.printType,
+      });
+    }
+    return { stopped: false };
+  }
   if (!skipPicking) {
     const pickingCsv = deferredPickingCsv || await goq.exportPickingCsvToFile();
     if (!deferredPickingCsv) step('exported picking csv', { file: pickingCsv.fullName, bytes: pickingCsv.size });
@@ -2768,6 +2798,84 @@ class CdpPage {
       el.click();
       return { ok: true, tag: el.tagName, text: (el.innerText || el.value || '').trim() };
     })()`);
+  }
+
+  // ベニー様版: 処理パネルの帳票作成（print_type=16 商品リスト（数量順））で PDF を作り、.o11y に保存する。
+  // 「作成する」(button#B010_report) は #pro_form を別ウィンドウへ POST する（例: /goq21/tcpdf2/examples/picklista.php?d=...）。
+  // その送信をフックして同じ内容を fetch し、PDF（%PDF-）であることを確認して保存する。
+  async createProductListReportPdf(printType) {
+    const previousDialogCount = run.javascriptDialogs?.length || 0;
+    const prepared = await this.eval(`(() => {
+      const select = document.querySelector('#print_type');
+      if (!select) return { ok: false, error: '#print_type (帳票作成) not found' };
+      const option = Array.from(select.options).find(o => o.value === ${JSON.stringify(String(printType))});
+      if (!option) return { ok: false, error: 'print_type option not found: ' + ${JSON.stringify(String(printType))}, options: Array.from(select.options).map(o => o.value + ':' + o.textContent.trim()).slice(0, 60) };
+      const proto = Object.getPrototypeOf(select);
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor?.set) descriptor.set.call(select, option.value); else select.value = option.value;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const checked = Array.from(document.getElementsByName('order_number[]')).filter(b => b.checked).map(b => b.value);
+      if (!checked.length) return { ok: false, error: 'no selected rows' };
+      const button = document.querySelector('#B010_report, button[name="B010"]');
+      if (!button || button.disabled) return { ok: false, error: 'create report button not found or disabled' };
+      window.__goqReportCapture = { submits: [], installedAt: new Date().toISOString() };
+      if (!window.__goqOrigFormSubmitForReport) window.__goqOrigFormSubmitForReport = HTMLFormElement.prototype.submit;
+      const serialize = form => {
+        const data = new URLSearchParams(new FormData(form));
+        return { action: form.action, method: (form.method || 'get').toUpperCase(), target: form.target || '', id: form.id || '', body: data.toString(), printType: data.get('print_type') || '', orders: data.getAll('order_number[]').length };
+      };
+      HTMLFormElement.prototype.submit = function () { window.__goqReportCapture.submits.push({ via: 'form.submit()', ...serialize(this) }); };
+      document.addEventListener('submit', event => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        window.__goqReportCapture.submits.push({ via: 'submit event', ...serialize(form) });
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, { capture: true, once: true });
+      if (!window.__goqOrigOpenForReport) window.__goqOrigOpenForReport = window.open;
+      window.open = function () { return null; };
+      button.scrollIntoView({ block: 'center', inline: 'center' });
+      button.click();
+      return { ok: true, checked, printType: option.value, printTypeText: option.textContent.trim() };
+    })()`);
+    if (!prepared.ok) throw new Error(`Product list report was not requested: ${JSON.stringify(prepared)}`);
+    let capture;
+    try {
+      capture = await waitUntil(async () => {
+        const current = await this.eval('window.__goqReportCapture');
+        return current?.submits?.length ? current : null;
+      }, 8000, 250).catch(() => null);
+    } finally {
+      await this.eval(`(() => {
+        if (window.__goqOrigFormSubmitForReport) HTMLFormElement.prototype.submit = window.__goqOrigFormSubmitForReport;
+        if (window.__goqOrigOpenForReport) window.open = window.__goqOrigOpenForReport;
+        return true;
+      })()`).catch(() => {});
+    }
+    if (!capture) throw new Error('Product list report button did not submit a form.');
+    const submit = capture.submits[capture.submits.length - 1];
+    if (String(submit.printType) !== String(printType)) throw new Error(`Report form submitted with unexpected print_type: ${JSON.stringify({ expected: printType, actual: submit.printType })}`);
+    if (submit.orders !== prepared.checked.length) throw new Error(`Report form order count mismatch: ${JSON.stringify({ selected: prepared.checked.length, submitted: submit.orders })}`);
+    const result = await this.eval(`(async () => {
+      const submit = ${JSON.stringify(submit)};
+      const response = await fetch(submit.action, { method: submit.method, credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: submit.body });
+      const buffer = await response.arrayBuffer();
+      const head = String.fromCharCode(...new Uint8Array(buffer.slice(0, 5)));
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return { ok: response.ok, status: response.status, type: response.headers.get('content-type') || '', disposition: response.headers.get('content-disposition') || '', isPdf: head === '%PDF-', size: bytes.length, base64: btoa(binary), textHead: head === '%PDF-' ? '' : new TextDecoder('utf-8').decode(buffer.slice(0, 400)) };
+    })()`);
+    const dialogs = (run.javascriptDialogs || []).slice(previousDialogCount);
+    if (!result.ok || !result.isPdf || result.size < 100) {
+      throw new Error(`Product list report was not a PDF: ${JSON.stringify({ status: result.status, type: result.type, size: result.size, textHead: result.textHead, dialogs })}`);
+    }
+    const outDir = path.join('.o11y', 'goq-unified-print-flow', 'picking');
+    fs.mkdirSync(outDir, { recursive: true });
+    const fullName = path.resolve(outDir, `goq-report-${printType}-${args.status}-${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`);
+    fs.writeFileSync(fullName, Buffer.from(result.base64, 'base64'));
+    return { fullName, size: result.size, printType: prepared.printType, printTypeText: prepared.printTypeText, checked: prepared.checked, action: submit.action.split('?')[0], via: submit.via, dialogs };
   }
 
   // ベニー様版: 送り状データ（B2クラウド形式）CSVを GoQ から出力して .o11y に保存する。
