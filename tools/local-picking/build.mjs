@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildPickingReport, checkMasterLayout, decodeCsvBuffer, loadExceptions, parseOrdersCsv, readCsvBytes } from './picking-core.mjs';
 import { loadMaster, masterConfigFromEnv } from './master-sheet.mjs';
+import { loadEnv } from '../lib/env.mjs';
+
+loadEnv();
 import { renderPickingHtml } from './render.mjs';
 import { htmlToPdfViaCdp, htmlToPdfViaHeadlessChrome, isPdfFile } from './pdf.mjs';
 

@@ -53,8 +53,9 @@ GoQの送り状印刷フローを使わずに、注文CSVだけからピッキ�
 
 | 変数 | 既定値 | 内容 |
 |---|---|---|
-| `PICKING_MASTER_SHEET_ID` | `1ymVLW4eAf95RzBAjFWbrrvjZxOM6onKdRqcllfT5z0s` | マスタのスプレッドシートID（ベニー様_ピッキング参照） |
-| `PICKING_MASTER_RANGE` | `GoQ全データ` | 読むタブ（1行目から全行を読む） |
+| `PICKING_MASTER_SHEET_ID` | `1XjamST5FsXEP1-SnPZUotp3naU-KFSgOU57YKmbEwo8` | マスタのスプレッドシートID（ベニー様_ピッキング参照） |
+| `PICKING_MASTER_RANGE` | `GoQ全データ` | 読むタブ名（1行目から全行を読む）。未設定で `PICKING_MASTER_GID` がある場合は gid からタブ名を解決する |
+| `PICKING_MASTER_GID` | なし | スプレッドシートURLの `gid=` の値（ベニー様シートは `1344234198`） |
 | `PICKING_CREDENTIALS_FILE` | `credentials.json` | サービスアカウント鍵 |
 | `PICKING_MASTER_CSV` | なし | 指定すると、Sheets APIではなくこのCSV（マスタをCSVで保存したもの）を読む |
 | `PICKING_CHROME_PATH` | 自動検出 | 単体でPDFを作るときに使うChrome |

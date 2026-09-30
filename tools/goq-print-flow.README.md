@@ -288,7 +288,7 @@ Product-name sorting must be verified on the GoQ order list itself. Do not evalu
 
 The Benny version does not use Smart Pick (`picking-list-app.vercel.app` reads the original version's GoQ全データ). Instead:
 
-1. `buildLocalPickingPdf()` (`tools/local-picking/build.mjs`) reads the saved picking CSV (Shift_JIS) and the master sheet through the Sheets API with the service account in `credentials.json` (read-only scope). Default master: ベニー様_ピッキング参照 `1ymVLW4eAf95RzBAjFWbrrvjZxOM6onKdRqcllfT5z0s`, range `GoQ全データ`. Override with `PICKING_MASTER_SHEET_ID` / `PICKING_MASTER_RANGE`. The original GoQ全データ ID is refused.
+1. `buildLocalPickingPdf()` (`tools/local-picking/build.mjs`) reads the saved picking CSV (Shift_JIS) and the master sheet through the Sheets API with the service account in `credentials.json` (read-only scope). Default master: ベニー様_ピッキング参照 `1XjamST5FsXEP1-SnPZUotp3naU-KFSgOU57YKmbEwo8`, range `GoQ全データ`. Override with `PICKING_MASTER_SHEET_ID` / `PICKING_MASTER_RANGE`. The original GoQ全データ ID is refused.
 2. It verifies the master's row-3 headers (Q=商品SKU, F=JAN, G=SET数, E=親ASIN, H=親ASIN-2, I=親JAN-2, J=SET-2, K=子ASIN, R=親) and stops if the columns are shifted.
 3. It applies the same aggregation as Smart Pick (`usePickingLogic.ts`): SKU match on column Q, SET数 × 個数, grouping by JAN, JAN-last-4 then name order, 複数個注文リスト, JAN確認用リスト, and 異常検知リスト for orders missing from the master.
 4. It writes HTML, PDF, report JSON and a master snapshot under `.o11y/goq-unified-print-flow/picking/`, and records `generated local picking pdf` in the run log.

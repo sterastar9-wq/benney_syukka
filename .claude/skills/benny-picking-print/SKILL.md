@@ -11,7 +11,7 @@ GoQの注文CSVとマスタ（「ベニー様_ピッキング参照」の `GoQ�
 
 ## 守ること
 
-- **元版のGoQ全データ（データ管理② `1V_y-3QNZ0DLLdAG9NSgdn4S-934hhRUcQgNVc7Pxc4I`）は読まない・書かない。** マスタはベニー様シート `1ymVLW4eAf95RzBAjFWbrrvjZxOM6onKdRqcllfT5z0s` だけを使う。
+- **元版のGoQ全データ（データ管理② `1V_y-3QNZ0DLLdAG9NSgdn4S-934hhRUcQgNVc7Pxc4I`）は読まない・書かない。** マスタはベニー様シート `1XjamST5FsXEP1-SnPZUotp3naU-KFSgOU57YKmbEwo8` だけを使う。
 - **Smart Pick（picking-list-app.vercel.app）は使わない。** 元版のマスタを読むため。
 - **PDFと集計結果にはお客様の氏名が入る。** `.o11y/` の外に置かない。チャットやほかのサービスに中身を貼らない。件数・SKU・商品名だけを報告する。
 - **印刷は紙が出る操作。** 手順5の条件を満たすまで印刷ボタンを押さない。
@@ -33,7 +33,7 @@ GoQの注文CSVとマスタ（「ベニー様_ピッキング参照」の `GoQ�
 **B. `credentials.json` が無い場合**
 Google Driveコネクタで最新のマスタを取り、検証してから使う。
 
-1. Driveコネクタの `download_file_content` を実行する。`fileId` は `1ymVLW4eAf95RzBAjFWbrrvjZxOM6onKdRqcllfT5z0s`、`exportMimeType` は `text/csv`。
+1. Driveコネクタの `download_file_content` を実行する。`fileId` は `1XjamST5FsXEP1-SnPZUotp3naU-KFSgOU57YKmbEwo8`、`exportMimeType` は `text/csv`。
 2. 返ってきた `content`（base64）を、1文字も変えずに `.o11y/local-picking/master-<日付>.b64` へ保存する。
 3. 検証して取り込む。
    ```
