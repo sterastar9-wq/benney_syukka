@@ -37,6 +37,8 @@ const STATUS = {
     label: '★ネコポス・クリックポスト',
     stat: 30,
     carrierText: 'ヤマト運輸',
+    carrierChangeFrom: ['日本郵便'],
+    manageShipDate: false,
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
@@ -47,6 +49,8 @@ const STATUS = {
     label: '★宅急便',
     stat: 26,
     carrierText: 'ヤマト運輸',
+    carrierChangeFrom: ['日本郵便'],
+    manageShipDate: false,
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
@@ -57,6 +61,8 @@ const STATUS = {
     label: '★クール便',
     stat: 27,
     carrierText: 'ヤマト運輸',
+    carrierChangeFrom: ['日本郵便'],
+    manageShipDate: false,
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
     labelButton: '#B2CloudGeneratePdfApi',
@@ -284,6 +290,27 @@ async function main() {
     }));
     failWithRun('Stopped before side effects because address warnings still need review.', 2);
   }
+  // ベニー様: 取り込み直後の行は配送業者が 日本郵便 なので、出荷日入力より前に ヤマト運輸 へ変更する（--no-carrier-change で無効化）
+  if (config.carrierChangeFrom?.length && args['no-carrier-change'] !== true) {
+    const changeCandidates = targetScopeRows(initialRows).filter(row =>
+      !excludeOrders.has(row.orderNumber) && !excludeOrders.has(row.goqId)
+      && !row.tracking && (!row.shipDate || (resume && row.shipDate === today))
+      && !carrierMatches(row.carrier, config.carrierText)
+      && config.carrierChangeFrom.some(from => normalizeText(row.carrier).includes(normalizeText(from))));
+    if (changeCandidates.length) {
+      const summary = { to: config.carrierText, rows: changeCandidates.map(pickRowSummary) };
+      if (execute) {
+        const changed = await goq.changeCarrierForGoqIds(changeCandidates.map(row => row.goqId), config.carrierText);
+        step('changed carrier for target rows', { ...summary, result: changed });
+        await goq.navigate(statusListUrl(config.stat));
+        await goq.waitForOrderList();
+        await goq.ensureStatusListContext(config.stat);
+        initialRows = await goq.readRows();
+      } else {
+        step('would change carrier for target rows (dry-run)', summary);
+      }
+    }
+  }
   let plan = buildEligiblePlan(initialRows, { config, onlyOrder, excludeOrders, allowShipDateToday: resume, requireShipDateToday: resume });
   let resumeRecoveryTargets = [];
   if (resume && !plan.eligible.length) {
@@ -336,7 +363,9 @@ async function main() {
     return;
   }
 
-  if (!resume) {
+  if (config.manageShipDate === false) {
+    step('skipped shipping date overwrite (status does not manage ship date)', { status: config.label, targets: plan.eligible.map(pickRowSummary) });
+  } else if (!resume) {
     await goq.selectGoqIds(plan.eligible.map(row => row.goqId));
     step('selected rows for shipping-date overwrite', { goqIds: plan.eligible.map(row => row.goqId), orderNumbers: plan.eligible.map(row => row.orderNumber) });
     const verifiedShippingDate = await goq.overwriteShippingDate(today);
@@ -362,6 +391,9 @@ async function main() {
   if (resumeRecoveryTargets.length) {
     const recoveryFilter = await goq.filterShippingDateTodayAndTargetOrders(today, resumeRecoveryTargets);
     step('filtered by shipping date today and recovered target orders', { date: today, filter: recoveryFilter });
+  } else if (config.manageShipDate === false) {
+    await goq.filterReportNumberEmpty();
+    step('filtered by empty tracking number (ship date not managed)', {});
   } else {
     await goq.filterShippingDateTodayAndReportNumberEmpty(today);
     step('filtered by shipping date today and empty tracking number', { date: today });
@@ -395,12 +427,16 @@ async function main() {
   }
   const selectedAfterFilter = await goq.selectAllThenKeepGoqIds(afterFilter.eligible.map(row => row.goqId));
   step('selected all visible rows then excluded non-target rows after filter/sort', { ...summarizePlan(afterFilter), selection: selectedAfterFilter });
-  const csvDateVerification = await goq.verifyShippingDate(afterFilter.eligible.map(row => row.goqId), today);
-  if (!csvDateVerification.ok) {
-    run.beforeCsv = csvDateVerification;
-    failWithRun('Stopped before CSV export because selected rows do not have today shipping date.', 4);
+  if (config.manageShipDate === false) {
+    step('verified selected rows before CSV export (ship date not managed)', { goqIds: afterFilter.eligible.map(row => row.goqId) });
+  } else {
+    const csvDateVerification = await goq.verifyShippingDate(afterFilter.eligible.map(row => row.goqId), today);
+    if (!csvDateVerification.ok) {
+      run.beforeCsv = csvDateVerification;
+      failWithRun('Stopped before CSV export because selected rows do not have today shipping date.', 4);
+    }
+    step('verified selected rows before CSV export', csvDateVerification);
   }
-  step('verified selected rows before CSV export', csvDateVerification);
   if (resume && !skipPicking) {
     const previousPicking = findPreviousPickingPrint(args.status, today, afterFilter.eligible.map(row => row.goqId));
     if (previousPicking) {
@@ -481,7 +517,8 @@ async function main() {
       await goq.navigate(statusListUrl(config.stat));
       await goq.waitForOrderList();
       await goq.ensureStatusListContext(config.stat);
-      await goq.filterShippingDateTodayAndReportNumberEmpty(today);
+      if (config.manageShipDate === false) await goq.filterReportNumberEmpty();
+      else await goq.filterShippingDateTodayAndReportNumberEmpty(today);
       if (storeTab) {
         const storeFilterAfterPhoneFix = await goq.applyStoreTabFilter(storeTab);
         step('reapplied store tab after phone normalization filter', storeFilterAfterPhoneFix);
@@ -622,7 +659,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
     const key = arg.slice(2);
-    if (['execute', 'skip-print', 'skip-picking', 'skip-labels', 'label-first', 'stop-after-date', 'preview-only-picking', 'stop-before-label-print', 'resume', 'amazon-only', 'approve-address-normalization', 'address-fixed-confirmed', 'address-unresolved-confirmed', 'no-auto-login', 'inspect-label-dialog'].includes(key)) {
+    if (['execute', 'skip-print', 'skip-picking', 'skip-labels', 'label-first', 'stop-after-date', 'preview-only-picking', 'stop-before-label-print', 'resume', 'amazon-only', 'approve-address-normalization', 'address-fixed-confirmed', 'address-unresolved-confirmed', 'no-auto-login', 'inspect-label-dialog', 'no-carrier-change'].includes(key)) {
       out[key] = true;
     } else {
       out[key] = argv[++i];
@@ -1299,11 +1336,13 @@ function buildEligiblePlan(rows, { config, onlyOrder, excludeOrders, allowShipDa
       blockers.push({ reason: 'address warning must be reviewed/fixed first', row: pickRowSummary(row) });
       continue;
     }
-    if (row.shipDate && !(allowShipDateToday && row.shipDate === today)) {
+    // ベニー様の GoQ には処理パネルの「一括入力（出荷日 上書き）」が無く、出荷日は扱わない（manageShipDate: false）
+    const manageShipDate = config.manageShipDate !== false;
+    if (manageShipDate && row.shipDate && !(allowShipDateToday && row.shipDate === today)) {
       excluded.push({ reason: 'ship date already set', row });
       continue;
     }
-    if (requireShipDateToday && row.shipDate !== today) {
+    if (manageShipDate && requireShipDateToday && row.shipDate !== today) {
       blockers.push({ reason: `ship date must be today before output: expected ${today}`, row: pickRowSummary(row) });
       continue;
     }
@@ -2179,6 +2218,49 @@ class CdpPage {
     return { ...result, row: pickRowSummary(row) };
   }
 
+  // ベニー様: 受注取り込み時点の配送業者は 日本郵便 なので、処理パネルの「配送業者」を ヤマト運輸 に変更してから出荷処理へ進む。
+  // 対象行だけを選択 → select[name="trader_type"] を設定 → 隣の「変更」(button[name="Btrader"]) → 画面更新後に配送業者欄で検証。
+  async changeCarrierForGoqIds(goqIds, carrier) {
+    await this.selectGoqIds(goqIds);
+    const previousDialogCount = run.javascriptDialogs?.length || 0;
+    const target = await this.eval(`(() => {
+      const checked = Array.from(document.getElementsByName('order_number[]')).filter(b => b.checked).map(b => b.value);
+      if (!checked.length) return { ok: false, error: 'no selected rows' };
+      const select = document.querySelector('select[name="trader_type"]');
+      if (!select) return { ok: false, error: 'trader_type select not found' };
+      const option = Array.from(select.options).find(o => o.value === ${JSON.stringify(carrier)} || o.textContent.trim() === ${JSON.stringify(carrier)});
+      if (!option) return { ok: false, error: 'carrier option not found', options: Array.from(select.options).map(o => o.value) };
+      const proto = Object.getPrototypeOf(select);
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor?.set) descriptor.set.call(select, option.value);
+      else select.value = option.value;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const button = select.parentElement?.querySelector('button[name="Btrader"]') || document.querySelector('button[name="Btrader"]');
+      if (!button || button.disabled) return { ok: false, error: 'carrier change button not found or disabled' };
+      button.scrollIntoView({ block: 'center', inline: 'center' });
+      button.click();
+      return { ok: true, checked, carrier: select.value, buttonText: button.textContent.trim() };
+    })()`);
+    if (!target.ok) throw new Error(`Carrier change was not requested: ${JSON.stringify(target)}`);
+    let last = null;
+    const verified = await waitUntil(async () => {
+      last = await this.eval(`(() => {
+        const ids = ${JSON.stringify(goqIds)};
+        const rows = ids.map(id => {
+          const row = document.querySelector('tr[data-order-number="' + id + '"]');
+          const cells = row ? Array.from(row.children) : [];
+          return { id, found: !!row, carrier: (cells[11]?.innerText || '').replace(/\\s+/g, ' ').trim() };
+        });
+        return { rows, ok: rows.every(r => r.found && r.carrier.includes(${JSON.stringify(carrier)})) };
+      })()`);
+      return last.ok ? last : false;
+    }, 20000, 1000).catch(error => ({ ok: false, error: error.message, last }));
+    const dialogs = (run.javascriptDialogs || []).slice(previousDialogCount);
+    if (!verified.ok) throw new Error(`Carrier change was not verified: ${JSON.stringify({ verified, dialogs })}`);
+    return { requested: target, verified, dialogs };
+  }
+
   async selectGoqIds(goqIds) {
     const result = await this.eval(`(() => {
       const ids = new Set(${JSON.stringify(goqIds)});
@@ -2797,10 +2879,18 @@ class CdpPage {
       let disposition = response.headers.get('content-disposition') || '';
       if (/text\\/html/i.test(type)) {
         const html = await response.text();
-        const marker = 'infile.php?fname=';
-        const index = html.indexOf(marker);
-        if (index < 0) return { ok: false, step: 'export', status: response.status, type, html: html.slice(0, 600), url };
-        const fname = html.slice(index + marker.length).split('"')[0].split("'")[0].split(')')[0].trim();
+        // 応答例: <script>//location.replace("../infile.php?fname=/tmp/.../ehiden/....csv")</script>
+        //         <script>location.replace("../infile.php?fname=/tmp/.../b2/....csv")</script>
+        // コメントアウトされた行（e-飛伝用）を除き、有効な最後のリンクを使う
+        const matches = Array.from(html.matchAll(/infile\\.php\\?fname=([^"')\\s]+)/g)).map(m => {
+          const lineStart = html.lastIndexOf('\\n', m.index) + 1;
+          const linePrefix = html.slice(lineStart, m.index).replace(/^.*<script[^>]*>/i, '').trim();
+          return { fname: m[1], commented: linePrefix.startsWith('//') };
+        });
+        const active = matches.filter(m => !m.commented);
+        const chosen = (active.length ? active : matches).at(-1);
+        if (!chosen) return { ok: false, step: 'export', status: response.status, type, html: html.slice(0, 600), url };
+        const fname = chosen.fname.trim();
         response = await fetch('/goq21/infile.php?fname=' + encodeURIComponent(fname), { credentials: 'same-origin' });
         type = response.headers.get('content-type') || '';
         disposition = response.headers.get('content-disposition') || '';
