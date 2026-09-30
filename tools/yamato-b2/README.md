@@ -34,12 +34,12 @@ npm run yamato:survey -- --max-pages 40 --depth 2 --screenshots
 
 | キー | 内容 |
 |---|---|
-| `YAMATO_BENY_HISSU` | 必須コード |
-| `YAMATO_BENY_NINNI` | 任意コード（無ければ空でよい） |
-| `YAMATO_BENY_PASSWORD` | パスワード |
+| `YAMATO_BENY_CODE` | お客様コード（ログイン画面の `#code1`、9〜12桁） |
+| `YAMATO_BENY_EDABAN` | お客様コードのハイフン以降の枝番（`#code2`、3桁。無ければ空） |
+| `YAMATO_BENY_PASSWORD` | パスワード（`#password`） |
 | `YAMATO_EXPECTED_COMPANY` | ログイン後に表示されるべき会社名（既定 `合同会社Ｂｅｎｙ`） |
 | `YAMATO_LOGIN_URL` | ログインURL（既定は HMPLGI0010JspServlet） |
-| `YAMATO_SELECTOR_HISSU` など | 走査で確定した入力欄のセレクタ（任意） |
+| `YAMATO_SELECTOR_CODE` など | 走査で確定した入力欄のセレクタ（任意） |
 
 ## 引き継ぎファイル
 

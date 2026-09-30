@@ -30,7 +30,7 @@ GoQ System（受注管理）の日々の出荷業務を自動化するツール�
 2. **`.env` を作る**（`.env.example` をコピーして値を入れる。Git には入りません）
 
    - GoQ: `GOQ_LOGIN_URL` / `GOQ_USER_ID` / `GOQ_PASSWORD` / `GOQ_SEQ_ID` / `GOQ_SEQ_PW`
-   - ヤマトビジネスメンバーズ: `YAMATO_BENY_HISSU`（必須コード）/ `YAMATO_BENY_NINNI`（任意コード）/ `YAMATO_BENY_PASSWORD`
+   - ヤマトビジネスメンバーズ: `YAMATO_BENY_CODE`（お客様コード）/ `YAMATO_BENY_EDABAN`（ハイフン以降の枝番）/ `YAMATO_BENY_PASSWORD`
    - プリンタ名の一部（既定はこのPCの `FUJIFILM Apeos C5240普通紙 / ヤマト / 佐川 / ネコポス（手差し）` に合わせてある）
 
 3. **`credentials.json`**（Google サービスアカウント鍵）をフォルダ直下に置き、「ベニー様_ピッキング参照」をそのサービスアカウントに **閲覧者** で共有する

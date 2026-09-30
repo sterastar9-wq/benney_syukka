@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ヤマトビジネスメンバーズ ログイン（ベニー様フロー 4 の入口）。
-// 認証情報は .env の YAMATO_BENY_HISSU（必須コード）/ YAMATO_BENY_NINNI（任意コード）/ YAMATO_BENY_PASSWORD を使う。
+// 認証情報は .env の YAMATO_BENY_CODE（必須コード）/ YAMATO_BENY_EDABAN（任意コード）/ YAMATO_BENY_PASSWORD を使う。
 //
 //   node tools/yamato-b2/login.mjs [--port 9223] [--check]
 //
@@ -16,8 +16,8 @@ import { CdpPage, connectOrOpen, listTargets, wait, waitUntil } from '../lib/cdp
 export const YAMATO_HOST = 'bmypage.kuronekoyamato.co.jp';
 export const YAMATO_LOGIN_URL = process.env.YAMATO_LOGIN_URL
   || 'https://bmypage.kuronekoyamato.co.jp/bmypage/servlet/jp.co.kuronekoyamato.wur.hmp.servlet.user.HMPLGI0010JspServlet';
-const ENV_KEYS = ['YAMATO_BENY_HISSU', 'YAMATO_BENY_PASSWORD'];
-const OPTIONAL_ENV_KEYS = ['YAMATO_BENY_NINNI'];
+const ENV_KEYS = ['YAMATO_BENY_CODE', 'YAMATO_BENY_PASSWORD'];
+const OPTIONAL_ENV_KEYS = ['YAMATO_BENY_EDABAN'];
 const LOG_DIR = path.join('.o11y', 'yamato-b2', 'login');
 
 export function yamatoEnvStatus() {
@@ -113,8 +113,8 @@ export async function ensureYamatoLogin(page, { step = () => {}, allowLogin = tr
   //   #kojin (name=KOJIN)               … 個人ユーザーID（使わない）
   //   a.login  onclick=func_request_Link('LOGIN') … ログイン
   const selectors = {
-    hissu: process.env.YAMATO_SELECTOR_HISSU || (await page.eval(`!!document.querySelector('#code1')`) ? '#code1' : state.fields.hissu?.selector),
-    ninni: process.env.YAMATO_SELECTOR_NINNI || (await page.eval(`!!document.querySelector('#code2')`) ? '#code2' : state.fields.ninni?.selector),
+    hissu: process.env.YAMATO_SELECTOR_CODE || (await page.eval(`!!document.querySelector('#code1')`) ? '#code1' : state.fields.hissu?.selector),
+    ninni: process.env.YAMATO_SELECTOR_EDABAN || (await page.eval(`!!document.querySelector('#code2')`) ? '#code2' : state.fields.ninni?.selector),
     password: process.env.YAMATO_SELECTOR_PASSWORD || (await page.eval(`!!document.querySelector('#password')`) ? '#password' : state.fields.password?.selector),
   };
   record.selectors = selectors;
@@ -122,8 +122,8 @@ export async function ensureYamatoLogin(page, { step = () => {}, allowLogin = tr
     throw new Error(`ログイン欄のセレクタを決められません: ${JSON.stringify(state.fields)}`);
   }
   const filled = {
-    hissu: await page.fillSelector(selectors.hissu, env.YAMATO_BENY_HISSU),
-    ninni: selectors.ninni && process.env.YAMATO_BENY_NINNI ? await page.fillSelector(selectors.ninni, process.env.YAMATO_BENY_NINNI) : { ok: true, skipped: true },
+    hissu: await page.fillSelector(selectors.hissu, env.YAMATO_BENY_CODE),
+    ninni: selectors.ninni && process.env.YAMATO_BENY_EDABAN ? await page.fillSelector(selectors.ninni, process.env.YAMATO_BENY_EDABAN) : { ok: true, skipped: true },
     password: await page.fillSelector(selectors.password, env.YAMATO_BENY_PASSWORD),
   };
   record.actions.push({ action: 'filled login fields', hissu: filled.hissu.ok, ninni: filled.ninni.ok, password: filled.password.ok });
