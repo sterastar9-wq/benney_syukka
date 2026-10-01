@@ -8,7 +8,7 @@ GoQ System（受注管理）の日々の出荷業務を自動化するツール�
 > - ヤマト・コンパクト・ネコポスの送り状は、GoQ の発行ボタンを使わず、**GoQ から B2クラウド用の送り状データCSVを出力し、ヤマトビジネスメンバーズ（B2クラウド）で印刷**します（[tools/yamato-b2/README.md](tools/yamato-b2/README.md)）。
 > - Docker は使いません。Windows ローカルの Node.js と Chrome で動かします。
 > - 認証情報は `.env` に統一しています（`.env.example` 参照）。
-> - 販売データの日次集計（`run_all.py` など）は、まだ元版のままです。使う前に `.env` のIDをすべてベニー様用に設定してください。
+> - 販売データの日次集計（`run_all.py` など）は、ベニー様では**当面使いません**（2026-09-30 決定。将来使う可能性あり）。コードは元版のまま残しています。
 
 ## ベニー様の出荷フロー
 
@@ -75,9 +75,18 @@ npm run yamato:survey     # 画面構造を .o11y/yamato-b2/survey/ に記録（
 | --- | --- | --- | --- | --- |
 | `nekoposu` | ★ネコポス・クリックポスト（30） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ネコポス |
 | `takkyubin` | ★宅急便（26） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
-| `cool` | ★クール便（27） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | ヤマト |
+| `compact` | コンパクト（`.env` の `GOQ_COMPACT_STAT` を設定したときだけ） | ヤマト運輸 | B2クラウドCSV → ヤマトビジネスメンバーズ | コンパクト |
 
-ベニー様の通常運用は `nekoposu`（★ネコポス・クリックポスト）です。配送業者が `日本郵便`（クリックポスト）の行は B2クラウドの対象外なので、対象から除外されて実行ログに `carrier mismatch` として残ります。
+ベニー様の通常運用は `nekoposu`（★ネコポス・クリックポスト）と `takkyubin`（★宅急便、ヤマト60サイズ）です。★クール便（27）は取り扱いがないのでフローの対象外です。
+
+取り込み直後の注文は、配送業者が `日本郵便` で、チェック項目/フラグも空です。フローは出荷日・送り状の工程に入る前に、次の2つを**別々の操作で**行います（GoQ では同時に変更できないため）。
+
+1. 配送業者を `ヤマト運輸` に一括変更する（`--no-carrier-change` で無効化）
+2. チェック項目/フラグを一括設定する: `nekoposu` は「ネコポス」、`compact` は「コンパクト」（`--no-check-flag` で無効化）。★宅急便は設定しない
+
+チェック項目/フラグの一括変更欄は、「ネコポス」などの選択肢を持つ選択欄を自動で探して使います（実画面では未検証）。見つからない場合は `.env` の `GOQ_CHECK_FLAG_SELECT` / `GOQ_CHECK_FLAG_BUTTON` にCSSセレクタを入れて固定します。
+
+コンパクトは、GoQ にコンパクト用のステータスができたら `.env` の `GOQ_COMPACT_STAT` にその番号を入れるだけで `--status compact` が使えるようになります。未設定のまま指定すると、GoQ に接続する前に止まります。
 
 よく使うオプション：
 
@@ -102,7 +111,7 @@ npm run goq:review
 
 手作業・エージェント作業で、印刷の前に「この操作をしてよいか」を判定します（`scripts/goq_flow_guard.py`）。ヤマト系は `picking_print → b2_csv_export → b2_import → label_print → b2_tracking_export → goq_tracking_import → tracking_verify → post_label_verify` の順でしか進めません。工程の一覧とルールは [GOQ_FLOW_CHECKPOINTS.md](GOQ_FLOW_CHECKPOINTS.md) を参照。Python 3.10 以上が必要です。
 
-## 販売データの日次集計（元版のまま）
+## 販売データの日次集計（ベニー様では当面使わない・元版のまま）
 
 `run_all.py` が GoQ・プライスターから前日の販売データを取り、Google スプレッドシートを更新します。Python 3.10 以上と `requirements.txt`、`playwright install chromium` が必要で、`.env` の `PRICETAR_*` / `GSHEET_*` / `*_BOOK_ID` をベニー様用に設定するまで動かさないでください。詳細は元版の手順（`RUN_ALL_REVIEW_PROTOCOL.md`、`scripts/register_run_all_daily_task.ps1`）を参照。
 

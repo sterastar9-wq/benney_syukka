@@ -104,6 +104,10 @@ export async function ensureYamatoLogin(page, { step = () => {}, allowLogin = tr
     record.actions.push({ action: 'navigate login url', url: YAMATO_LOGIN_URL, isLoginPage: state.isLoginPage });
   }
   if (!state.isLoginPage) {
+    // ヤマトビジネスメンバーズは 7:00〜25:00（B2クラウドのみ 4:00〜）しか使えない。時間外はログイン欄が出ない
+    if (/ご利用時間外/.test(state.textHead || '')) {
+      throw new Error('ヤマトビジネスメンバーズの利用時間外です（ご利用可能時間 7:00〜25:00、B2クラウドのみ 4:00から）。時間内に再実行してください。');
+    }
     throw new Error(`ヤマトのログイン画面を認識できません: ${JSON.stringify({ url: state.url, title: state.title, text: state.textHead })}`);
   }
   // 2026-09-30 の走査で確定したログイン画面（HMPLGI0010）の構造:

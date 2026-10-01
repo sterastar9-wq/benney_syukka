@@ -52,10 +52,18 @@ class Session {
     });
   }
 
-  send(method, params = {}) {
+  // 応答が返らない命令で止まり続けないよう、命令ごとに制限時間を設ける
+  send(method, params = {}, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
       const id = ++this.seq;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} が ${timeoutMs}ms 以内に応答しませんでした`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -216,11 +224,22 @@ export async function printPdfViaChrome(port, pdfPath, {
   const created = await fetch(cdpHttpUrl(port, `/json/new?${encodeURIComponent(fileUrlForBrowser(path.resolve(pdfPath)))}`), { method: 'PUT' }).then(r => r.json());
   let viewer;
   try {
-    const viewerTarget = await waitUntil(async () => (await listTargets(port))
-      .find(t => t.type === 'iframe' && t.parentId === created.id && t.url.includes(PDF_VIEWER_EXTENSION)), 30000, 500);
-    viewer = await Session.connect(viewerTarget.webSocketDebuggerUrl);
-    await viewer.send('Runtime.enable');
-    await waitUntil(() => viewer.eval(`Boolean(document.querySelector('pdf-viewer'))`), 30000, 500);
+    // PDFビューアの読み込み直後は命令に応答しないことがあるので、応答するまで最大3回つなぎ直す
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const viewerTarget = await waitUntil(async () => (await listTargets(port))
+        .find(t => t.type === 'iframe' && t.parentId === created.id && t.url.includes(PDF_VIEWER_EXTENSION)), 30000, 500);
+      await wait(1000);
+      viewer = await Session.connect(viewerTarget.webSocketDebuggerUrl);
+      try {
+        await viewer.send('Runtime.enable', {}, 10000);
+        await waitUntil(() => viewer.eval(`Boolean(document.querySelector('pdf-viewer'))`), 30000, 500);
+        break;
+      } catch (error) {
+        viewer.close();
+        viewer = null;
+        if (attempt === 3) throw new Error(`PDFビューアに接続できませんでした: ${error.message}`);
+      }
+    }
     await wait(1500);
     const clicked = await viewer.eval(`(() => {
       const button = document.querySelector('pdf-viewer')?.shadowRoot

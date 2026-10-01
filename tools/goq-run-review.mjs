@@ -44,8 +44,9 @@ function reviewRun(run, file) {
   if (exportedLabelCsv && !printedPicking && run.args?.['skip-picking'] !== true && !run.error) {
     violations.push({ code: 'LABEL_BEFORE_PICKING', message: 'B2 Cloud CSV export occurred without a picking-list output step in the same run.' });
   }
-  if (exportedLabelCsv && printedPicking && firstIndex('exported shipping label csv') < firstIndex('picking') && run.args?.['label-first'] !== true) {
-    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud CSV export occurred before picking-list output.' });
+  // ベニー様版: B2用CSVの出力は読み取りなので点検のためピッキングより前でよい。引き継ぎ（取込み・発行へ渡す）はピッキングの後
+  if (hasStep('wrote b2 cloud handoff') && printedPicking && firstIndex('wrote b2 cloud handoff') < firstIndex('picking list') && run.args?.['label-first'] !== true) {
+    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud handoff (label import) was written before picking-list output.' });
   }
   if (exportedLabelCsv && !hasStep('verified shipping label csv against target snapshot')) {
     violations.push({ code: 'LABEL_CSV_NOT_VERIFIED', message: 'B2 Cloud CSV was exported without verification against the target snapshot.' });
@@ -233,7 +234,7 @@ function collectGoalIssues(run, observed) {
     if (!run.labelIssuanceVerification?.ok) {
       issues.push({ code: 'GOAL_LABEL_CSV_NOT_VERIFIED', message: 'Goal requires the exported CSV to match the target snapshot, but verification is missing or failed.', detail: run.labelIssuanceVerification || null });
     }
-    if (!observed.hasStep('wrote b2 cloud handoff')) {
+    if (!observed.hasStep('wrote b2 cloud handoff') && !observed.hasStep('all b2 targets blocked by precheck')) {
       issues.push({ code: 'GOAL_B2_HANDOFF_MISSING', message: 'Goal requires a B2 Cloud handoff file for the Yamato Business Members step, but none was written.' });
     }
     if (observed.requestedLabel || observed.downloadedLabel) {

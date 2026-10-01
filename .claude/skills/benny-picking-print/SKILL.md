@@ -65,6 +65,7 @@ npm run -s picking:pdf -- --csv <注文CSV> --master-csv .o11y/local-picking/mas
 - `anomalyOrders` が1以上のとき：マスタに無い注文がある。`anomalySkus` を示し、PDF末尾の「異常検知リスト」に載っていることを伝える。その商品はピッキング対象から外れているので、マスタへの登録を提案する。
 - `emptyJanLines` が1以上のとき：JANが空の行がある。マスタのF列（JAN）の入力を提案する。
 - 総個数がおかしい（桁違い、NaN）とき：マスタのG列（SET数）を確認する。
+- `manyItemOrders` が1以上のとき：3品以上の注文がある（送り状の品名コード欄に入りきらない）。PDFの「3品以上の注文リスト」に明細が載っていることを伝える。`manyItemOrdersWithoutCode` に商品SKUがあれば、`data/hinmei-codes.csv` への品名コードの登録を提案する。
 
 ### 5. 印刷する
 

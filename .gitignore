@@ -95,3 +95,5 @@ credentials.json
 .env
 # .env の雛形は共有する（実体の .env は除外のまま）
 !.env.example
+# 送り状の品名コード案（商品SKUごと。お客様情報なし）
+!data/hinmei-codes.csv

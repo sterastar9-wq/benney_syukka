@@ -49,6 +49,16 @@ hr { margin: 16px 0; }
 .sub-list td.qty, .sub-list td.janc { font-size: 16px; text-align: center; font-weight: bold; }
 .sub-list td.sku { font-size: 0.75rem; }
 .warnings { border: 2px solid #c00; padding: 6px 10px; margin: 10px 0; font-size: 12px; }
+.many-items .note { text-align: center; font-size: 11px; margin: 4px 0 8px; }
+.blocked { border: 3px solid #c00; padding: 6px 8px 8px; margin: 12px 0; }
+.blocked h3 { margin: 0 0 4px; font-size: 15px; color: #c00; }
+.blocked .note { font-size: 11px; margin-bottom: 6px; }
+.blocked td { font-size: 11px; vertical-align: top; background: #fff; }
+.blocked td.reason { color: #c00; }
+.many-items td.order { font-size: 12px; vertical-align: top; background: #fff; }
+.many-items td.code { font-size: 14px; font-weight: bold; white-space: nowrap; }
+.many-items td.qty, .many-items td.janc { font-size: 16px; text-align: center; font-weight: bold; }
+.many-items tbody tr.first-item td { border-top: 2px solid #333; }
 `;
 
 function colGroup() {
@@ -84,6 +94,36 @@ function subListTable(title, rows, { quantity, lastHeader, fifthHeader, fifthCel
   </div>`;
 }
 
+// 3品以上の注文（B2の品名コード欄に入りきらない）の明細。注文ごとに全商品を並べる
+function manyItemOrdersTable(orders, janCell) {
+  if (!orders?.length) return '';
+  const body = orders.map(order => order.items.map((item, i) => `
+      <tr class="${i === 0 ? 'first-item' : ''}">
+        ${i === 0 ? `<td class="order" rowspan="${order.items.length}">${esc(order.GoQ管理番号)}<br>${esc(order.送付先氏名)}<br>（${order.items.length}品）</td>` : ''}
+        <td class="code">${esc(item.品名コード || '（品名コード未登録）')}</td>
+        <td>${esc(item.商品名)}</td>
+        <td class="qty">${esc(item.個数)}</td>
+        <td class="janc">${esc(janCell(item.JANコード))}</td>
+        <td class="other"></td>
+      </tr>`).join('')).join('');
+  return `
+  <div class="sub-list many-items">
+    <h2>3品以上の注文リスト</h2>
+    <div class="note">送り状の品名コード欄は2品までなので、この注文は送り状ではなくこの一覧で商品を確認してください</div>
+    <table class="print-table">
+      <thead><tr>
+        <th style="width:15%">GoQ管理番号 / 送付先</th>
+        <th style="width:20%">品名コード</th>
+        <th>商品名</th>
+        <th style="width:6%">個数</th>
+        <th style="width:9%">JAN</th>
+        <th class="other" style="width:6%">チェック</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>`;
+}
+
 export function renderPickingHtml(report, { createdAt, exceptions, sourceLabel } = {}) {
   const janCell = jan => formatJanDisplay(jan, exceptions);
   const rows = report.pickingList.map(item => `
@@ -101,6 +141,17 @@ export function renderPickingHtml(report, { createdAt, exceptions, sourceLabel }
       </tr>`).join('');
 
   const notes = report.shippingNotes.length ? `<span class="shipping-notes"> - ${esc(report.shippingNotes.join(', '))} - </span>` : '';
+  const blocked = report.blockedOrders?.length ? `
+  <div class="blocked">
+    <h3>⚠ 送り状を発行しない注文（${report.blockedOrders.length}件・ピッキング対象外）</h3>
+    <div class="note">送り状データに不備があるため、この注文は送り状を発行しません。商品も取らないでください。原因を直してから出荷します。</div>
+    <table class="print-table">
+      <thead><tr><th style="width:12%">GoQ管理番号</th><th style="width:16%">送付先氏名</th><th>商品</th><th style="width:34%">理由</th></tr></thead>
+      <tbody>${report.blockedOrders.map(b => `
+        <tr><td>${esc(b.goqId)}</td><td>${esc(b.送付先氏名)}</td><td>${b.items.map(i => `${esc(i.商品名)} ×${esc(i.個数)}`).join('<br>')}</td><td class="reason">${b.reasons.map(esc).join('<br>')}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  </div>` : '';
   const warning = report.anomalyOrders.length
     ? `<div class="warnings">注意：マスタに無い（リストアップ対象外の）注文が ${report.anomalyOrders.length} 件あります。末尾の異常検知リストを確認してください。</div>`
     : '';
@@ -127,6 +178,7 @@ export function renderPickingHtml(report, { createdAt, exceptions, sourceLabel }
       </div>
     </div>
   </div>
+  ${blocked}
   ${warning}
   <div class="work-log-grid">
     <div class="grid-header">ピッキング</div>
@@ -177,6 +229,7 @@ export function renderPickingHtml(report, { createdAt, exceptions, sourceLabel }
     </tr></tfoot>
   </table>
   <hr>
+  ${manyItemOrdersTable(report.manyItemOrders, janCell)}
   ${subListTable('複数個注文リスト', report.multiItemOrders, {
     quantity: item => item.表示個数,
     lastHeader: 'チェック',

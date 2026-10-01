@@ -64,7 +64,7 @@ Benny's GoQ statuses (verified on the live system on 2026-09-30):
 | --- | --- | ---: | --- | --- | --- | --- |
 | `nekoposu` | ★ネコポス・クリックポスト | 30 | ヤマト運輸 (ネコポス) | b2-csv | `#trader_s` = `b2_cloud` (B2クラウド) → `B020` 出力 → ヤマトビジネスメンバーズ | ネコポス |
 | `takkyubin` | ★宅急便 | 26 | ヤマト運輸 | b2-csv | same | ヤマト |
-| `cool` | ★クール便 | 27 | ヤマト運輸 | b2-csv | same | ヤマト |
+| `compact` | コンパクト (only when `GOQ_COMPACT_STAT` is set) | env | ヤマト運輸 (コンパクト) | b2-csv | same | コンパクト |
 
 Other statuses on Benny's GoQ (not print targets): 29 ★発送済み, 32 ★出荷通知, 17 メール待機, 33 ★処理済み, 24 出荷日記入, 3 発送前入金待ち, 6 発送後入金待ち. Carrier options are 日本郵便 / ヤマト運輸 / 佐川急便. Rows whose carrier is `日本郵便` (クリックポスト) are excluded as `carrier mismatch`.
 
@@ -72,7 +72,7 @@ Picking CSV is custom CSV id 1 (`カスタムCSV全項目(サンプル)`), which
 
 Printer names on this PC contain these strings (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`). `.env` `PRINTER_*` overrides them.
 
-Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`, `cool-amazon`) exist for compatibility only; Benny's GoQ has no store tab (`#st`).
+★クール便 (27) is not handled by Benny and is not a flow target. Before shipping date / label steps, the runner changes carrier 日本郵便 → ヤマト運輸, then sets the チェック項目/フラグ in a separate operation (`nekoposu` → ネコポス, `compact` → コンパクト; ★宅急便 has none), because GoQ cannot change both at once. Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`) exist for compatibility only; Benny's GoQ has no store tab (`#st`).
 
 Base status keys must not implicitly apply the Amazon tab. Use an Amazon variant, `--amazon-only`, or explicit `--store-tab "Amazon"` only when requested.
 

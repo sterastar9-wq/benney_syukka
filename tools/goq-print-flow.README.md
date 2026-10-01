@@ -8,7 +8,7 @@ Benny's flow: GoQ login → local picking-list print → **B2 Cloud CSV export f
 
 ## B2 Cloud CSV Route
 
-All Benny statuses (`nekoposu`, `takkyubin`, `cool`, and their `-amazon` variants) have `labelMode: 'b2-csv'` in `STATUS`. For them the runner does **not** press `#B2CloudGeneratePdfApi`. Instead, inside `outputLabels()`:
+All Benny statuses (`nekoposu`, `takkyubin`, `compact` when `GOQ_COMPACT_STAT` is set, and their `-amazon` variants) have `labelMode: 'b2-csv'` in `STATUS`. For them the runner does **not** press `#B2CloudGeneratePdfApi`. Instead, inside `outputLabels()`:
 
 1. Reselect all visible rows, keep only targets, and re-verify today's ship date / empty tracking number (same as before).
 2. Record the label target snapshot (`recorded shipping-label target snapshot`).
@@ -38,13 +38,13 @@ Benny's GoQ (verified 2026-09-30):
 | --- | --- | ---: | --- | --- | --- |
 | `nekoposu` | ★ネコポス・クリックポスト | 30 | ヤマト運輸 | b2-csv | ネコポス |
 | `takkyubin` | ★宅急便 | 26 | ヤマト運輸 | b2-csv | ヤマト |
-| `cool` | ★クール便 | 27 | ヤマト運輸 | b2-csv | ヤマト |
+| `compact` | コンパクト (`GOQ_COMPACT_STAT`) | env | ヤマト運輸 | b2-csv | コンパクト |
 
 `日本郵便` (クリックポスト) rows are excluded as carrier mismatch. Picking CSV uses custom id 1 (`GOQ_PICKING_CSV_CUSTOM_ID`). The `goq-api` label mode (Sagawa Smart API, original version) remains in the code but no Benny status uses it.
 
 Printer strings are substrings of this PC's printer names (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`) and can be overridden with `.env` `PRINTER_PICKING` / `PRINTER_YAMATO` / `PRINTER_NEKOPOSU` / `PRINTER_SAGAWA` (`tools/lib/printers.mjs`).
 
-Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`, `cool-amazon`) exist for compatibility only; Benny's GoQ has no store tab.
+★クール便 (27) is not handled by Benny. Check flag (チェック項目/フラグ): after the carrier change, `changeCheckFlagForGoqIds()` selects the target rows and sets ネコポス (`nekoposu`) or コンパクト (`compact`) through the bulk-edit select that has that option (override with `GOQ_CHECK_FLAG_SELECT` / `GOQ_CHECK_FLAG_BUTTON`), then verifies the flag text appears on each row. Not yet verified on the live GoQ screen. Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`) exist for compatibility only; Benny's GoQ has no store tab.
 
 The base status keys never apply the Amazon tab unless `--amazon-only` or `--store-tab` is explicitly supplied.
 
@@ -283,6 +283,10 @@ Product-name sorting must be verified on the GoQ order list itself. Do not evalu
 4. Poll about every 100ms until the GoQ list DOM order changed or was otherwise reflected for a one-row list.
 5. Do not apply agent-side Japanese/numeric collation as the source of truth; GoQ owns the sort semantics.
 6. Stop before CSV export or shipping-label generation if the product-name sort action cannot be verified.
+
+## B2 Precheck Before Picking (Benny version)
+
+In `b2-csv` mode the runner, before the picking list: confirms targets (phone normalization + target snapshot), exports the picking CSV and the B2 Cloud CSV at the same moment (both read-only), verifies the CSV against the snapshot, and runs `rewriteB2CsvFile()` (ship date = today, 品名コード from `data/hinmei-codes.csv`). Orders whose B2 required fields are empty (お届け先/ご依頼主/請求先/送り状種類) are `blocked`: removed from the import CSV and the picking totals, listed at the top of the picking list as 「⚠ 送り状を発行しない注文」, and recorded in the handoff as `blockedOrders`. Missing/oversized 品名コード only warns and keeps GoQ's value. B2 CSV export before picking is allowed (it changes nothing in GoQ); the reviewers instead require `wrote b2 cloud handoff` (label import) to come after the picking-list output, and `goq_flow_guard.py` requires `picking_print` before `b2_import`.
 
 ## Local Picking PDF (Benny version)
 

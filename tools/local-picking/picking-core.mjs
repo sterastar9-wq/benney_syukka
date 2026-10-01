@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_EXCEPTIONS_FILE = path.join(HERE, 'exceptions.json');
+// 送り状の品名コード（短縮名(SET数)JAN下4桁）。商品SKUごと。ベニー様独自の追加機能（Smart Pickには無い）
+export const DEFAULT_HINMEI_CODES_FILE = path.join(HERE, '..', '..', 'data', 'hinmei-codes.csv');
+// B2クラウドの品名コード欄は2つまでなので、これ以上の商品数の注文はピッキングリストに明細を載せる
+export const MANY_ITEM_ORDER_MIN = 3;
 
 // Smart Pick がCSVから取り込む列（page.tsx の validHeaders）
 export const ORDER_HEADERS = [
@@ -254,7 +258,65 @@ function sortPickingList(list, exceptions) {
   });
 }
 
-export function buildPickingReport(orders, sheet, exceptions = loadExceptions()) {
+// data/hinmei-codes.csv を { 小文字の商品SKU → 品名コード } にする（無ければ空）
+export function loadHinmeiCodes(file = DEFAULT_HINMEI_CODES_FILE) {
+  const map = new Map();
+  if (!file || !fs.existsSync(file)) return map;
+  const rows = parseCsvRows(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  const header = rows[0] || [];
+  const skuIdx = header.indexOf('商品SKU');
+  const codeIdx = header.indexOf('品名コード');
+  if (skuIdx === -1 || codeIdx === -1) return map;
+  for (const r of rows.slice(1)) {
+    const sku = (r[skuIdx] || '').trim();
+    const code = (r[codeIdx] || '').trim();
+    if (sku && code) map.set(sku.toLowerCase(), code);
+  }
+  return map;
+}
+
+// 商品が MANY_ITEM_ORDER_MIN 品以上の注文（B2の品名コード欄に入りきらない）を、注文ごとの明細にする。ベニー様独自。
+function buildManyItemOrders(orders, sheet, hinmeiCodes, minItems = MANY_ITEM_ORDER_MIN) {
+  const byOrder = new Map();
+  for (const item of orders) {
+    const id = (item['GoQ管理番号'] || '').trim();
+    if (!id) continue;
+    if (!byOrder.has(id)) byOrder.set(id, []);
+    byOrder.get(id).push(item);
+  }
+  const lookupCode = item => {
+    for (const key of [item['商品SKU'], item['SKU管理番号'], item['商品コード']]) {
+      const code = key && hinmeiCodes.get(key.trim().toLowerCase());
+      if (code) return code;
+    }
+    return '';
+  };
+  const result = [];
+  for (const [goqId, items] of byOrder) {
+    if (items.length < minItems) continue;
+    result.push({
+      GoQ管理番号: goqId,
+      送付先氏名: items[0]['送付先氏名'] || '',
+      受注番号: items[0]['受注番号'] || '',
+      items: items.map(item => {
+        const count = toInt(item['個数'], 0) || 0;
+        const setCount = calculateSetCount(item, sheet);
+        return {
+          商品SKU: item['商品SKU'] || item['SKU管理番号'] || item['商品コード'] || '',
+          商品名: item['商品名'] || '',
+          個数: count,
+          SET数: setCount,
+          単品数: setCount * count,
+          JANコード: findJanCode(item, sheet) || '',
+          品名コード: lookupCode(item),
+        };
+      }),
+    });
+  }
+  return result.sort((a, b) => a.GoQ管理番号.localeCompare(b.GoQ管理番号, 'ja', { numeric: true }));
+}
+
+export function buildPickingReport(orders, sheet, exceptions = loadExceptions(), { hinmeiCodes = new Map() } = {}) {
   const skuMatches = key => key && sheet.some(r => lower(r[FIXED_SKU_INDEX]) === key.toLowerCase());
   const validOrders = orders.filter(item => skuMatches(item['商品コード']) || skuMatches(item['商品SKU']));
   const anomalyOrders = orders.filter(item => !validOrders.includes(item));
@@ -294,6 +356,7 @@ export function buildPickingReport(orders, sheet, exceptions = loadExceptions())
     multiItemOrders,
     janCheckOrders,
     anomalyOrders,
+    manyItemOrders: buildManyItemOrders(orders, sheet, hinmeiCodes),
     masterColumns: picking.columns,
     masterWarnings: picking.warnings,
     masterRowCount: sheet.length,

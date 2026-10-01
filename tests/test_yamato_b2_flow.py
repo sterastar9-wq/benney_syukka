@@ -49,8 +49,16 @@ def test_yamato_family_blocks_goq_api_label_request(carrier):
     assert f"phase_not_allowed_for_carrier:{carrier}:label_request" in errors
 
 
-def test_yamato_b2_csv_export_requires_picking_print():
+def test_yamato_b2_csv_export_allowed_before_picking_print():
+    # B2用CSVの出力は読み取りなので、点検のためピッキングより前でよい
     status, errors, _ = guard.review_proposal(completed_state("yamato"), proposal("yamato", "b2_csv_export"))
+
+    assert "required_checkpoint_missing:yamato:picking_print" not in errors
+
+
+def test_yamato_b2_import_requires_picking_print():
+    # 送り状が作られる B2取込みは、ピッキングリストの印刷の後でなければならない
+    status, errors, _ = guard.review_proposal(completed_state("yamato", "b2_csv_export"), proposal("yamato", "b2_import"))
 
     assert status == "blocked"
     assert "required_checkpoint_missing:yamato:picking_print" in errors

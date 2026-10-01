@@ -39,7 +39,8 @@ PHASE_ORDER = {
     "label_request": 40,
     "ehiden_csv_export": 40,
     # ベニー様版ヤマト系: GoQ から B2クラウド用CSVを出力 → ヤマトビジネスメンバーズに取込 → 印刷 → 送り状番号を GoQ へ戻す
-    "b2_csv_export": 40,
+    # B2用CSVの出力は GoQ を変えない読み取りなので、点検のためピッキングより前に行ってよい（2026-10-01 決定）
+    "b2_csv_export": 25,
     "ehiden_import": 50,
     "b2_import": 50,
     "label_download": 50,
@@ -97,8 +98,8 @@ CARRIER_ALLOWED_PHASES = {
 }
 
 YAMATO_B2_PREREQUISITES = {
-    "b2_csv_export": ["picking_print"],
-    "b2_import": ["b2_csv_export"],
+    # 送り状が作られる工程（B2取込み・発行）はピッキングリストの印刷と点検済みCSVの後
+    "b2_import": ["picking_print", "b2_csv_export"],
     "label_print": ["b2_import"],
     "b2_tracking_export": ["label_print"],
     "goq_tracking_import": ["b2_tracking_export"],
@@ -376,7 +377,9 @@ def review_proposal(state: dict[str, Any], proposal: Proposal) -> tuple[str, lis
         if required.get("status") != STATUS_COMPLETED:
             errors.append(f"required_checkpoint_missing:{proposal.carrier}:{required_phase}")
 
-    if proposal.carrier in {"yamato", "compact", "nekopos"} and proposal.phase in {"label_download", "label_print", "post_label_verify"}:
+    # ベニー様版のヤマト系は GoQ の発行ボタン（label_request）を使わず B2クラウド経路なので、
+    # label_request を前提にしない（代わりに YAMATO_B2_PREREQUISITES で b2_import を前提にしている）
+    if proposal.carrier in {"yamato", "compact", "nekopos"} and proposal.phase in {"label_download", "label_print", "post_label_verify"}             and proposal.phase not in YAMATO_B2_PREREQUISITES:
         req = checkpoints.get(checkpoint_key(proposal.carrier, "label_request"), {})
         if req.get("status") != STATUS_COMPLETED:
             errors.append("label_request_must_be_completed_first")

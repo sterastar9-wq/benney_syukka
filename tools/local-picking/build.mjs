@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildPickingReport, checkMasterLayout, decodeCsvBuffer, loadExceptions, parseOrdersCsv, readCsvBytes } from './picking-core.mjs';
+import { buildPickingReport, checkMasterLayout, decodeCsvBuffer, loadExceptions, loadHinmeiCodes, parseOrdersCsv, readCsvBytes } from './picking-core.mjs';
 import { loadMaster, masterConfigFromEnv } from './master-sheet.mjs';
 import { loadEnv } from '../lib/env.mjs';
 
@@ -26,6 +26,8 @@ export async function buildLocalPickingPdf({
   masterConfig = masterConfigFromEnv(),
   exceptionsFile,
   now = new Date(),
+  // 送り状を発行しない注文（B2の必須項目が空など）。[{ goqId, reasons: [...] }]。ピッキングの集計から外し、先頭に警告を出す
+  blockedOrders = [],
 }) {
   fs.mkdirSync(outDir, { recursive: true });
   const base = `picking-${stamp(now)}`;
@@ -42,6 +44,12 @@ export async function buildLocalPickingPdf({
     throw new Error(`ピッキングCSVに必要な列がありません: ${missingRequired.join(', ')}`);
   }
   if (!orders.length) throw new Error(`ピッキングCSVに注文行がありません: ${csvPath}`);
+  const blockedIds = new Set(blockedOrders.map(b => String(b.goqId)));
+  const blockedWithNames = blockedOrders.map(b => {
+    const rows = orders.filter(o => String(o['GoQ管理番号'] || '').trim() === String(b.goqId));
+    return { ...b, 送付先氏名: rows[0]?.['送付先氏名'] || '', items: rows.map(o => ({ 商品名: o['商品名'] || '', 個数: o['個数'] || '' })) };
+  });
+  const pickingOrders = orders.filter(o => !blockedIds.has(String(o['GoQ管理番号'] || '').trim()));
 
   const master = await loadMaster(masterConfig);
   if (master.values.length < 4) {
@@ -55,7 +63,9 @@ export async function buildLocalPickingPdf({
   }
 
   const exceptions = loadExceptions(exceptionsFile);
-  const report = buildPickingReport(orders, master.values, exceptions);
+  const hinmeiCodes = loadHinmeiCodes();
+  const report = buildPickingReport(pickingOrders, master.values, exceptions, { hinmeiCodes });
+  report.blockedOrders = blockedWithNames;
   const createdAt = now.toLocaleString('ja-JP');
   fs.writeFileSync(files.html, renderPickingHtml(report, { createdAt, exceptions }), 'utf8');
 
@@ -72,6 +82,10 @@ export async function buildLocalPickingPdf({
     totalSingleUnits: report.totalSingleUnits,
     multiItemOrders: report.multiItemOrders.length,
     janCheckOrders: report.janCheckOrders.length,
+    manyItemOrders: report.manyItemOrders.length,
+    blockedOrders: blockedWithNames.map(b => ({ goqId: b.goqId, reasons: b.reasons })),
+    manyItemOrdersWithoutCode: report.manyItemOrders.flatMap(o => o.items).filter(i => !i.品名コード).map(i => i.商品SKU),
+    hinmeiCodesLoaded: hinmeiCodes.size,
     anomalyOrders: report.anomalyOrders.length,
     anomalySkus: report.anomalyOrders.map(o => o['商品SKU'] || o['商品コード'] || ''),
     emptyJanLines: report.pickingList.filter(l => !l.JANコード).length,

@@ -46,6 +46,22 @@ const layoutOk = checkMasterLayout(sheet).ok === true && checkMasterLayout(shift
 console.log(`${layoutOk ? 'OK' : 'NG'} masterLayoutCheck`);
 if (!layoutOk) failed++;
 
+// 3品以上の注文リスト（ベニー様独自）: 3品の注文だけが載り、品名コードはSKUで引ける
+{
+  const base = { 'GoQ管理番号': '', '送付先氏名': 'テスト 様', '個数': '1', '商品コード': '', 'SKU管理番号': '' };
+  const many = buildPickingReport([
+    { ...base, 'GoQ管理番号': '9001', '商品SKU': 'A-1', '商品名': 'x' },
+    { ...base, 'GoQ管理番号': '9001', '商品SKU': 'B-12', '商品名': 'y' },
+    { ...base, 'GoQ管理番号': '9001', '商品SKU': 'ZZZ', '商品名': 'z' },
+    { ...base, 'GoQ管理番号': '9002', '商品SKU': 'A-1', '商品名': 'x' },
+    { ...base, 'GoQ管理番号': '9002', '商品SKU': 'B-12', '商品名': 'y' },
+  ], sheet, exceptions, { hinmeiCodes: new Map([['a-1', 'ﾃｽﾄ(1)1001']]) }).manyItemOrders;
+  const ok = many.length === 1 && many[0].GoQ管理番号 === '9001' && many[0].items.length === 3
+    && many[0].items[0].品名コード === 'ﾃｽﾄ(1)1001' && many[0].items[2].品名コード === '';
+  console.log(`${ok ? 'OK' : 'NG'} manyItemOrders`);
+  if (!ok) failed++;
+}
+
 if (failed) {
   console.error(`${failed} 件の不一致があります`);
   process.exit(1);

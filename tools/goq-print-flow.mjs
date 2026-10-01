@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { WebSocket } from 'ws';
 import { cdpHttpUrl, cdpWebSocketUrl, fileUrlForBrowser, pathForBrowser } from './cdp-connection.mjs';
 import { buildLocalPickingPdf } from './local-picking/build.mjs';
+import { rewriteB2CsvFile } from './yamato-b2/rewrite-b2-csv.mjs';
 import { loadEnv, envNumber } from './lib/env.mjs';
 import { PICKING_PRINTER, LABEL_PRINTER_BY_STATUS } from './lib/printers.mjs';
 import { ensureGoqLogin } from './goq-login.mjs';
@@ -30,14 +31,16 @@ const B2_HANDOFF_DIR = path.join('.o11y', 'goq-unified-print-flow', 'b2-handoff'
 const PICKING_CSV_CUSTOM_ID = String(process.env.GOQ_PICKING_CSV_CUSTOM_ID || '1');
 
 // ベニー様の GoQ ステータス（2026-09-30 に実画面で確認。元版の 佐川28/ヤマト30/コンパクト29/ネコポス徳島31 とは別物）
-//   30 ★ネコポス・クリックポスト / 26 ★宅急便 / 27 ★クール便 / 29 ★発送済み / 32 ★出荷通知 / 17 メール待機 / 33 ★処理済み / 24 出荷日記入 / 3 発送前入金待ち / 6 発送後入金待ち
+//   30 ★ネコポス・クリックポスト / 26 ★宅急便 / 27 ★クール便（ベニー様は取り扱いなし。フロー対象外） / 29 ★発送済み / 32 ★出荷通知 / 17 メール待機 / 33 ★処理済み / 24 出荷日記入 / 3 発送前入金待ち / 6 発送後入金待ち
 // 配送業者の選択肢は 日本郵便 / ヤマト運輸 / 佐川急便。送り状はすべて B2クラウドCSV経路（GoQ の発行ボタンは使わない）。
 const STATUS = {
   nekoposu: {
     label: '★ネコポス・クリックポスト',
     stat: 30,
     carrierText: 'ヤマト運輸',
-    carrierChangeFrom: ['日本郵便'],
+    carrierChangeFrom: ['日本郵便', '佐川急便'],
+    // 取り込み直後はチェック項目/フラグが入っていないので、配送業者の変更とは別の操作で「ネコポス」を一括設定する（2026-09-30 聞き取り）
+    checkFlag: 'ネコポス',
     manageShipDate: false,
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
@@ -49,7 +52,7 @@ const STATUS = {
     label: '★宅急便',
     stat: 26,
     carrierText: 'ヤマト運輸',
-    carrierChangeFrom: ['日本郵便'],
+    carrierChangeFrom: ['日本郵便', '佐川急便'],
     manageShipDate: false,
     labelMode: 'b2-csv',
     labelCsvFormat: 'b2_cloud',
@@ -57,25 +60,29 @@ const STATUS = {
     labelButtonText: 'ヤマト運輸送り状発行',
     labelPrinter: LABEL_PRINTER_BY_STATUS.takkyubin,
   },
-  cool: {
-    label: '★クール便',
-    stat: 27,
-    carrierText: 'ヤマト運輸',
-    carrierChangeFrom: ['日本郵便'],
-    manageShipDate: false,
-    labelMode: 'b2-csv',
-    labelCsvFormat: 'b2_cloud',
-    labelButton: '#B2CloudGeneratePdfApi',
-    labelButtonText: 'ヤマト運輸送り状発行',
-    labelPrinter: LABEL_PRINTER_BY_STATUS.cool,
-  },
+  // コンパクト: GoQ にコンパクト用のステータスができたら .env の GOQ_COMPACT_STAT にその番号を入れると使えるようになる。
+  // チェック項目/フラグに「コンパクト」を一括設定してから、B2クラウドCSV経路で「コンパクト」プリンタに印刷する。
+  ...(process.env.GOQ_COMPACT_STAT ? {
+    compact: {
+      label: process.env.GOQ_COMPACT_LABEL || 'コンパクト',
+      stat: Number(process.env.GOQ_COMPACT_STAT),
+      carrierText: 'ヤマト運輸',
+      carrierChangeFrom: ['日本郵便', '佐川急便'],
+      checkFlag: 'コンパクト',
+      manageShipDate: false,
+      labelMode: 'b2-csv',
+      labelCsvFormat: 'b2_cloud',
+      labelButton: '#B2CloudGeneratePdfApi',
+      labelButtonText: 'ヤマト運輸送り状発行',
+      labelPrinter: LABEL_PRINTER_BY_STATUS.compact,
+    },
+  } : {}),
 };
 
 // ベニー様の GoQ には店舗タブ（#st）が無いため、Amazon 限定キーは通常使わない（互換のため残す）
 const AMAZON_STATUS_ALIASES = new Map([
   ['nekoposu-amazon', 'nekoposu'],
   ['takkyubin-amazon', 'takkyubin'],
-  ['cool-amazon', 'cool'],
 ]);
 
 const GOQ_ORIGIN = 'https://order.goqsystem.com';
@@ -312,6 +319,29 @@ async function main() {
       }
     }
   }
+  // ベニー様: チェック項目/フラグ（ネコポス・コンパクト）を一括設定する。配送業者と同時には変更できないので、配送業者の変更の後に別操作で行う
+  if (config.checkFlag && args['no-check-flag'] !== true) {
+    const flagCandidates = targetScopeRows(initialRows).filter(row =>
+      !excludeOrders.has(row.orderNumber) && !excludeOrders.has(row.goqId)
+      && !row.tracking && (!row.shipDate || (resume && row.shipDate === today))
+      // 対象になる注文だけ（配送業者がヤマト運輸、または確認モードでこれからヤマト運輸に変更する行）。佐川急便などの対象外の行には付けない
+      && (carrierMatches(row.carrier, config.carrierText)
+        || (!execute && (config.carrierChangeFrom || []).some(from => normalizeText(row.carrier).includes(normalizeText(from)))))
+      && !normalizeText(row.text).includes(normalizeText(config.checkFlag)));
+    if (flagCandidates.length) {
+      const summary = { flag: config.checkFlag, rows: flagCandidates.map(pickRowSummary) };
+      if (execute) {
+        const changed = await goq.changeCheckFlagForGoqIds(flagCandidates.map(row => row.goqId), config.checkFlag);
+        step('changed check flag for target rows', { ...summary, result: changed });
+        await goq.navigate(statusListUrl(config.stat));
+        await goq.waitForOrderList();
+        await goq.ensureStatusListContext(config.stat);
+        initialRows = await goq.readRows();
+      } else {
+        step('would change check flag for target rows (dry-run)', summary);
+      }
+    }
+  }
   let plan = buildEligiblePlan(initialRows, { config, onlyOrder, excludeOrders, allowShipDateToday: resume, requireShipDateToday: resume });
   let resumeRecoveryTargets = [];
   if (resume && !plan.eligible.length) {
@@ -447,84 +477,9 @@ async function main() {
     }
   }
 
-  let deferredPickingCsv = null;
-  const outputPicking = async () => {
-  if (!skipPicking && (args['picking-mode'] || process.env.GOQ_PICKING_MODE || config.pickingMode || 'local-picking-pdf') === 'goq-report') {
-    // ベニー様の手順書（手順24〜26）: 処理パネルの帳票作成で「商品リスト（数量順）」を作成し、A4・白黒で普通紙に印刷する。
-    // マスタシート（ベニー様_ピッキング参照）は使わない。
-    const report = await goq.createProductListReportPdf(config.pickingReportType || '16');
-    step('created goq product list report', { file: report.fullName, bytes: report.size, printType: report.printType, printTypeText: report.printTypeText, checked: report.checked, action: report.action });
-    if (!skipPrint) {
-      const pickingPdf = await openPdfInNewTab(port, report.fullName);
-      let pickingPreview;
-      try {
-        await pickingPdf.viewer.enable();
-        pickingPreview = await pickingPdf.viewer.printPdf(PICKING_PRINTER, { press: !previewOnlyPicking, closeWithoutPrinting: previewOnlyPicking });
-      } finally {
-        await pickingPdf.close();
-      }
-      step(previewOnlyPicking ? 'verified picking print preview without pressing print' : 'printed picking list', {
-        printer: PICKING_PRINTER,
-        destination: pickingPreview.destination,
-        expectedPrinter: PICKING_PRINTER,
-        screenshot: pickingPreview.screenshotPath,
-        pages: pickingPreview.pages,
-        color: '白黒',
-        duplex: false,
-        source: 'goq-report',
-        pdf: report.fullName,
-        printType: report.printType,
-      });
-    }
-    return { stopped: false };
-  }
-  if (!skipPicking) {
-    const pickingCsv = deferredPickingCsv || await goq.exportPickingCsvToFile();
-    if (!deferredPickingCsv) step('exported picking csv', { file: pickingCsv.fullName, bytes: pickingCsv.size });
-
-    if (!skipPrint) {
-    // ベニー様版: Smart Pick を使わず、ローカルで集計してPDFを作り、送り状と同じPDF印刷の手順で印刷する
-    const localPicking = await buildLocalPickingPdf({
-      csvPath: pickingCsv.fullName,
-      outDir: LOCAL_PICKING_DIR,
-      port,
-    });
-    step('generated local picking pdf', localPicking.summary);
-    if (localPicking.summary.anomalyOrders > 0) {
-      step('local picking pdf has orders missing from master', {
-        count: localPicking.summary.anomalyOrders,
-        skus: localPicking.summary.anomalySkus,
-        note: 'PDF末尾の異常検知リストに記載。マスタ(ベニー様_ピッキング参照)への登録漏れを確認する',
-      });
-    }
-    const pickingPdf = await openPdfInNewTab(port, localPicking.files.pdf);
-    let pickingPreview;
-    try {
-      await pickingPdf.viewer.enable();
-      pickingPreview = await pickingPdf.viewer.printPdf(PICKING_PRINTER, { press: !previewOnlyPicking, closeWithoutPrinting: previewOnlyPicking });
-    } finally {
-      await pickingPdf.close();
-    }
-    step(previewOnlyPicking ? 'verified picking print preview without pressing print' : 'printed picking list', {
-      printer: PICKING_PRINTER,
-      destination: pickingPreview.destination,
-      expectedPrinter: PICKING_PRINTER,
-      screenshot: pickingPreview.screenshotPath,
-      pages: pickingPreview.pages,
-      color: '白黒',
-      duplex: false,
-      source: 'local-picking-pdf',
-      pdf: localPicking.files.pdf,
-    });
-    }
-  } else {
-    step('skipped picking list by option', {});
-  }
-  return { stopped: false };
-  };
-
-  const outputLabels = async () => {
-  if (!skipLabels) {
+  // 送り状の対象を確定する（選び直し → 出力前の確認 → 電話番号の整形 → 対象スナップショット）。
+  // B2クラウドCSV経路では、ピッキングリストより前に呼んで、点検したCSVと同じ対象でピッキング・送り状を作る。
+  const prepareLabelTargets = async () => {
     await goq.bringToFront();
     const selectedBeforeLabel = await goq.selectAllThenKeepGoqIds(afterFilter.eligible.map(row => row.goqId));
     step('reselected all visible rows then excluded non-target rows before label generation', selectedBeforeLabel);
@@ -574,17 +529,149 @@ async function main() {
     });
     run.labelTargetSnapshot = labelTargetSnapshot;
     step('recorded shipping-label target snapshot', labelTargetSnapshot);
+    return { beforeLabelPlan, labelRequestTime, labelTargetSnapshot };
+  };
+
+  // GoQ から B2クラウド用CSVを出力し（読み取りのみ）、対象と突合して、取込み用に書き換える。
+  // B2の必須項目が空の注文は blocked（送り状を発行しない・ピッキングからも外す）。
+  const exportAndCheckB2Csv = async (targets, pickingCsvPath, purpose) => {
+    const labelCsv = await goq.exportLabelCsvToFile(config);
+    step('exported shipping label csv', { ...labelCsv, requestedAt: targets.labelRequestTime.toISOString(), mode: LABEL_MODE_B2_CSV, purpose });
+    const csvVerification = verifyLabelCsvAgainstTargets(labelCsv, targets.labelTargetSnapshot.targets);
+    run.labelIssuanceVerification = csvVerification;
+    step('verified shipping label csv against target snapshot', csvVerification);
+    if (!csvVerification.ok) {
+      failWithRun('Stopped because the exported B2 Cloud CSV does not match the shipping-label target snapshot.', 4);
+    }
+    // 取込み前の書き換え: 出荷予定日を今日に（B2は本日〜30日後しか受け付けない）、品名コードを「短縮名(SET数)JAN下4桁」に
+    const rewrite = rewriteB2CsvFile({ csvPath: labelCsv.fullName, pickingCsvPath, shipDate: today.replace(/-/g, '/') });
+    run.b2CsvRewrite = rewrite;
+    step('rewrote b2 csv for import', {
+      ok: rewrite.ok, out: rewrite.out, rows: rewrite.rows, importRows: rewrite.importRows, shipDate: rewrite.shipDate,
+      codes: rewrite.changes.map(c => ({ customerNo: c.customerNo, codes: c.codes.map(x => x.to) })),
+      blocked: rewrite.blocked, fatal: rewrite.fatal, warnings: rewrite.warnings,
+    });
+    if (!rewrite.ok) {
+      failWithRun('Stopped because the B2 Cloud CSV has an unexpected format and could not be rewritten for import.', 4);
+    }
+    if (rewrite.blocked.length) {
+      step('excluded orders from shipping labels by b2 precheck', {
+        orders: rewrite.blocked,
+        note: 'B2の必須項目が空のため送り状を発行しない。ピッキングの集計からも外し、ピッキングリストの先頭に警告を出す',
+      });
+    }
+    return { labelCsv, csvVerification, rewrite };
+  };
+
+  const isB2Mode = (config.labelMode || LABEL_MODE_GOQ_API) === LABEL_MODE_B2_CSV;
+  let b2Prepared = null;
+  let deferredPickingCsv = null;
+  const outputPicking = async () => {
+  if (!skipPicking && (args['picking-mode'] || process.env.GOQ_PICKING_MODE || config.pickingMode || 'local-picking-pdf') === 'goq-report') {
+    // ベニー様の手順書（手順24〜26）: 処理パネルの帳票作成で「商品リスト（数量順）」を作成し、A4・白黒で普通紙に印刷する。
+    // マスタシート（ベニー様_ピッキング参照）は使わない。
+    const report = await goq.createProductListReportPdf(config.pickingReportType || '16');
+    step('created goq product list report', { file: report.fullName, bytes: report.size, printType: report.printType, printTypeText: report.printTypeText, checked: report.checked, action: report.action });
+    if (!skipPrint) {
+      const pickingPdf = await openPdfInNewTab(port, report.fullName);
+      let pickingPreview;
+      try {
+        await pickingPdf.viewer.enable();
+        pickingPreview = await pickingPdf.viewer.printPdf(PICKING_PRINTER, { press: !previewOnlyPicking, closeWithoutPrinting: previewOnlyPicking });
+      } finally {
+        await pickingPdf.close();
+      }
+      step(previewOnlyPicking ? 'verified picking print preview without pressing print' : 'printed picking list', {
+        printer: PICKING_PRINTER,
+        destination: pickingPreview.destination,
+        expectedPrinter: PICKING_PRINTER,
+        screenshot: pickingPreview.screenshotPath,
+        pages: pickingPreview.pages,
+        color: '白黒',
+        duplex: false,
+        source: 'goq-report',
+        pdf: report.fullName,
+        printType: report.printType,
+      });
+    }
+    return { stopped: false };
+  }
+  if (!skipPicking) {
+    const pickingCsv = deferredPickingCsv || await goq.exportPickingCsvToFile();
+    if (!deferredPickingCsv) step('exported picking csv', { file: pickingCsv.fullName, bytes: pickingCsv.size });
+    // B2用CSVの品名コードを引くのに使う（同じ注文の商品SKU）
+    run.pickingCsvFile = pickingCsv.fullName;
+
+    if (!skipPrint) {
+    // ベニー様版: Smart Pick を使わず、ローカルで集計してPDFを作り、送り状と同じPDF印刷の手順で印刷する
+    const localPicking = await buildLocalPickingPdf({
+      csvPath: pickingCsv.fullName,
+      outDir: LOCAL_PICKING_DIR,
+      port,
+      blockedOrders: b2Prepared?.rewrite?.blocked || [],
+    });
+    step('generated local picking pdf', localPicking.summary);
+    if (localPicking.summary.anomalyOrders > 0) {
+      step('local picking pdf has orders missing from master', {
+        count: localPicking.summary.anomalyOrders,
+        skus: localPicking.summary.anomalySkus,
+        note: 'PDF末尾の異常検知リストに記載。マスタ(ベニー様_ピッキング参照)への登録漏れを確認する',
+      });
+    }
+    const pickingPdf = await openPdfInNewTab(port, localPicking.files.pdf);
+    let pickingPreview;
+    try {
+      await pickingPdf.viewer.enable();
+      pickingPreview = await pickingPdf.viewer.printPdf(PICKING_PRINTER, { press: !previewOnlyPicking, closeWithoutPrinting: previewOnlyPicking });
+    } finally {
+      await pickingPdf.close();
+    }
+    step(previewOnlyPicking ? 'verified picking print preview without pressing print' : 'printed picking list', {
+      printer: PICKING_PRINTER,
+      destination: pickingPreview.destination,
+      expectedPrinter: PICKING_PRINTER,
+      screenshot: pickingPreview.screenshotPath,
+      pages: pickingPreview.pages,
+      color: '白黒',
+      duplex: false,
+      source: 'local-picking-pdf',
+      pdf: localPicking.files.pdf,
+    });
+    }
+  } else {
+    step('skipped picking list by option', {});
+  }
+  return { stopped: false };
+  };
+
+  const outputLabels = async () => {
+  if (!skipLabels) {
+    const { beforeLabelPlan, labelRequestTime, labelTargetSnapshot } = b2Prepared?.targets || await prepareLabelTargets();
     if ((config.labelMode || LABEL_MODE_GOQ_API) === LABEL_MODE_B2_CSV) {
       // ベニー様フロー 3: GoQ から B2クラウド用の送り状データCSVを出力する。GoQ側の発行ボタン（B2クラウドAPI）は押さない。
-      const labelCsv = await goq.exportLabelCsvToFile(config);
-      step('exported shipping label csv', { ...labelCsv, requestedAt: labelRequestTime.toISOString(), mode: LABEL_MODE_B2_CSV });
-      const csvVerification = verifyLabelCsvAgainstTargets(labelCsv, labelTargetSnapshot.targets);
-      run.labelIssuanceVerification = csvVerification;
-      step('verified shipping label csv against target snapshot', csvVerification);
-      if (!csvVerification.ok) {
-        failWithRun('Stopped because the exported B2 Cloud CSV does not match the shipping-label target snapshot.', 4);
+      // 通常はピッキングより前に点検済み（b2Prepared）。label-first などで未点検ならここで出力・点検する
+      let pre = b2Prepared;
+      if (!pre) {
+        let pickingCsvForB2 = run.pickingCsvFile;
+        if (!pickingCsvForB2 || !fs.existsSync(pickingCsvForB2)) {
+          const again = await goq.exportPickingCsvToFile();
+          pickingCsvForB2 = again.fullName;
+          step('exported picking csv for b2 rewrite', { file: again.fullName, bytes: again.size });
+        }
+        pre = await exportAndCheckB2Csv({ labelRequestTime, labelTargetSnapshot }, pickingCsvForB2, 'label stage');
       }
-      const handoff = writeB2Handoff({ labelCsv, snapshot: labelTargetSnapshot, verification: csvVerification });
+      const { labelCsv, csvVerification, rewrite } = pre;
+      const blockedIds = new Set(rewrite.blocked.map(b => String(b.goqId)));
+      if (!rewrite.importRows) {
+        step('all b2 targets blocked by precheck', { blocked: rewrite.blocked, note: 'すべての注文がB2の必須項目不足のため、送り状を発行しない（引き継ぎファイルは作らない）' });
+        return { stopped: false };
+      }
+      const handoff = writeB2Handoff({
+        labelCsv: { ...labelCsv, fullName: rewrite.out, originalCsv: labelCsv.fullName },
+        snapshot: { ...labelTargetSnapshot, targets: labelTargetSnapshot.targets.filter(t => !blockedIds.has(String(t.goqId))) },
+        verification: csvVerification,
+        blocked: rewrite.blocked,
+      });
       run.b2Handoff = handoff;
       step('wrote b2 cloud handoff', handoff);
       step('shipping label print is delegated to yamato business members', {
@@ -644,6 +731,15 @@ async function main() {
   return { stopped: false };
   };
 
+  if (isB2Mode && !skipLabels && !labelFirst) {
+    const targets = await prepareLabelTargets();
+    const pickingCsv = await goq.exportPickingCsvToFile();
+    step('exported picking csv', { file: pickingCsv.fullName, bytes: pickingCsv.size, purpose: 'picking list and b2 precheck (same snapshot)' });
+    run.pickingCsvFile = pickingCsv.fullName;
+    deferredPickingCsv = pickingCsv;
+    b2Prepared = { targets, pickingCsv, ...(await exportAndCheckB2Csv(targets, pickingCsv.fullName, 'precheck before picking (read-only; GoQ data is not changed)')) };
+  }
+
   if (labelFirst) {
     step('using label-first output order', { reason: 'avoid picking-list reprint when label generation may exclude rows' });
     if (!skipPicking) {
@@ -702,6 +798,9 @@ function resolveStatus(statusKey) {
   if (STATUS[statusKey]) return { config: STATUS[statusKey], baseStatus: statusKey, storeTab: '' };
   const baseStatus = AMAZON_STATUS_ALIASES.get(statusKey);
   if (baseStatus) return { config: STATUS[baseStatus], baseStatus, storeTab: 'Amazon' };
+  if (statusKey === 'compact' || statusKey === 'compact-amazon') {
+    throw new Error('コンパクトのステータスが未設定です。GoQ にコンパクト用のステータスを作ったら、.env の GOQ_COMPACT_STAT にその番号（index.php?stat=◯◯ の数字）を入れてください。');
+  }
   return { config: null, baseStatus: statusKey, storeTab: '' };
 }
 
@@ -855,7 +954,7 @@ function verifyLabelCsvAgainstTargets(labelCsv, targets) {
 }
 
 // ヤマトビジネスメンバーズ側（tools/yamato-b2/）へ渡す引き継ぎファイルを書く
-function writeB2Handoff({ labelCsv, snapshot, verification }) {
+function writeB2Handoff({ labelCsv, snapshot, verification, blocked = [] }) {
   fs.mkdirSync(B2_HANDOFF_DIR, { recursive: true });
   const file = path.join(B2_HANDOFF_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}-${args.status}.json`);
   const handoff = {
@@ -868,10 +967,14 @@ function writeB2Handoff({ labelCsv, snapshot, verification }) {
     labelMode: LABEL_MODE_B2_CSV,
     labelPrinter: config.labelPrinter,
     csv: path.resolve(labelCsv.fullName),
+    // 書き換え前（GoQが出力したまま）のCSV。csv は出荷予定日・品名コードを書き換えた取込み用
+    originalCsv: labelCsv.originalCsv ? path.resolve(labelCsv.originalCsv) : null,
     csvBytes: labelCsv.size,
     csvFormat: labelCsv.format,
     dataRowCount: verification.dataRowCount,
     targets: snapshot.targets.map(target => ({ goqId: target.goqId, orderNumber: target.orderNumber, carrier: target.carrier, shipDate: target.shipDate })),
+    // B2の必須項目不足で送り状を発行しない注文（取込み用CSVから外してある）
+    blockedOrders: blocked,
     runLog: path.resolve(run.logFile),
     yamato: { imported: false, printed: false, trackingImportedToGoq: false },
   };
@@ -1120,8 +1223,10 @@ function reviewRunInProcess(candidate) {
   if (exportedLabelCsv && !printedPicking && candidate.args?.['skip-picking'] !== true && !candidate.error) {
     violations.push({ code: 'LABEL_BEFORE_PICKING', message: 'B2 Cloud CSV export occurred without picking-list output in the same run.' });
   }
-  if (exportedLabelCsv && printedPicking && firstIndex('exported shipping label csv') < firstIndex('picking') && candidate.args?.['label-first'] !== true) {
-    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud CSV export occurred before picking-list output.' });
+  // ベニー様版: B2用CSVの出力はGoQを変えない読み取りなので、点検のためピッキングより前でよい（2026-10-01 決定）。
+  // 送り状が作られる工程（引き継ぎ → B2取込み・発行）がピッキングの後であることを確認する
+  if (hasStep('wrote b2 cloud handoff') && printedPicking && firstIndex('wrote b2 cloud handoff') < firstIndex('picking list') && candidate.args?.['label-first'] !== true) {
+    violations.push({ code: 'ORDERING_VIOLATION', message: 'B2 Cloud handoff (label import) was written before picking-list output.' });
   }
 
   if (!candidate.ruleMaterial?.ok) {
@@ -1291,7 +1396,7 @@ function collectGoalIssues(candidate, observed) {
     // ベニー様版ヤマト系: GoQ側の発行ではなく、CSV出力 → 突合 → 引き継ぎファイルまでがこの run のゴール
     if (!observed.hasStep('exported shipping label csv')) issues.push({ code: 'GOAL_LABEL_CSV_EXPORT_MISSING', message: 'Goal requires the B2 Cloud shipping-label CSV export, but no export step was recorded.' });
     if (!candidate.labelIssuanceVerification?.ok) issues.push({ code: 'GOAL_LABEL_CSV_NOT_VERIFIED', message: 'Goal requires the exported CSV to match the target snapshot, but verification is missing or failed.', detail: candidate.labelIssuanceVerification || null });
-    if (!observed.hasStep('wrote b2 cloud handoff')) issues.push({ code: 'GOAL_B2_HANDOFF_MISSING', message: 'Goal requires a B2 Cloud handoff file for the Yamato Business Members step, but none was written.' });
+    if (!observed.hasStep('wrote b2 cloud handoff') && !observed.hasStep('all b2 targets blocked by precheck')) issues.push({ code: 'GOAL_B2_HANDOFF_MISSING', message: 'Goal requires a B2 Cloud handoff file for the Yamato Business Members step, but none was written.' });
     if (observed.requestedLabel || observed.downloadedLabel) issues.push({ code: 'GOQ_LABEL_API_USED_IN_B2_CSV_MODE', message: 'GoQ-side label generation was used although this status must export the B2 Cloud CSV instead.' });
     return issues;
   }
@@ -1583,11 +1688,18 @@ class CdpPage {
     });
   }
 
-  async send(method, params = {}) {
+  // 応答が返らない命令（閉じかけの印刷プレビューやPDFビューアなど）で止まり続けないよう、制限時間を設ける。
+  // 時間切れは CDP のエラー応答と同じ形（{ error }）で返すので、呼び出し側の既存のエラー処理に乗る。
+  async send(method, params = {}, timeoutMs = Number(process.env.GOQ_CDP_TIMEOUT_MS || 120000)) {
     await this.ready;
     return new Promise(resolve => {
       const id = ++this.seq;
-      this.pending.set(id, resolve);
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) return;
+        this.pending.delete(id);
+        resolve({ id, error: { code: -32000, message: `CDP ${method} timed out after ${timeoutMs}ms` } });
+      }, timeoutMs);
+      this.pending.set(id, msg => { clearTimeout(timer); resolve(msg); });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -2288,6 +2400,58 @@ class CdpPage {
     }, 20000, 1000).catch(error => ({ ok: false, error: error.message, last }));
     const dialogs = (run.javascriptDialogs || []).slice(previousDialogCount);
     if (!verified.ok) throw new Error(`Carrier change was not verified: ${JSON.stringify({ verified, dialogs })}`);
+    return { requested: target, verified, dialogs };
+  }
+
+  // チェック項目/フラグの一括変更。GoQ一覧の一括変更欄から、指定したフラグ名の選択肢を持つ選択欄とその横のボタンを使う。
+  // 実画面の要素が確定したら .env の GOQ_CHECK_FLAG_SELECT / GOQ_CHECK_FLAG_BUTTON（CSSセレクタ）で固定できる。
+  // 確認は、対象行の表示にフラグ名が出ることで行う（未検証: 2026-09-30 時点で実画面では未確認）。
+  async changeCheckFlagForGoqIds(goqIds, flag) {
+    await this.selectGoqIds(goqIds);
+    const previousDialogCount = run.javascriptDialogs?.length || 0;
+    const selectSelector = process.env.GOQ_CHECK_FLAG_SELECT || '';
+    const buttonSelector = process.env.GOQ_CHECK_FLAG_BUTTON || '';
+    const target = await this.eval(`(() => {
+      const flag = ${JSON.stringify(flag)};
+      const checked = Array.from(document.getElementsByName('order_number[]')).filter(b => b.checked).map(b => b.value);
+      if (!checked.length) return { ok: false, error: 'no selected rows' };
+      const hasFlag = select => Array.from(select.options).some(o => o.textContent.trim() === flag || o.value === flag);
+      const select = ${JSON.stringify(selectSelector)}
+        ? document.querySelector(${JSON.stringify(selectSelector)})
+        : Array.from(document.querySelectorAll('select')).find(s => s.name !== 'trader_type' && !s.closest('tr[data-order-number]') && hasFlag(s));
+      if (!select) {
+        return { ok: false, error: 'check flag select not found', selects: Array.from(document.querySelectorAll('select')).filter(s => !s.closest('tr[data-order-number]')).map(s => ({ name: s.name, id: s.id, options: Array.from(s.options).slice(0, 15).map(o => o.textContent.trim()) })) };
+      }
+      const option = Array.from(select.options).find(o => o.textContent.trim() === flag || o.value === flag);
+      if (!option) return { ok: false, error: 'check flag option not found', select: select.name || select.id, options: Array.from(select.options).map(o => o.textContent.trim()) };
+      const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select), 'value');
+      if (descriptor?.set) descriptor.set.call(select, option.value);
+      else select.value = option.value;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const button = ${JSON.stringify(buttonSelector)}
+        ? document.querySelector(${JSON.stringify(buttonSelector)})
+        : (select.parentElement?.querySelector('button, input[type="button"], input[type="submit"]') || select.nextElementSibling);
+      if (!button || button.disabled) return { ok: false, error: 'check flag button not found or disabled', select: select.name || select.id };
+      button.scrollIntoView({ block: 'center', inline: 'center' });
+      button.click();
+      return { ok: true, checked, select: select.name || select.id, value: select.value, buttonText: (button.textContent || button.value || '').trim() };
+    })()`);
+    if (!target.ok) throw new Error(`Check flag change was not requested: ${JSON.stringify(target)}`);
+    let last = null;
+    const verified = await waitUntil(async () => {
+      last = await this.eval(`(() => {
+        const ids = ${JSON.stringify(goqIds)};
+        const rows = ids.map(id => {
+          const row = document.querySelector('tr[data-order-number="' + id + '"]');
+          return { id, found: !!row, hasFlag: !!row && (row.innerText || '').includes(${JSON.stringify(flag)}) };
+        });
+        return { rows, ok: rows.every(r => r.found && r.hasFlag) };
+      })()`);
+      return last.ok ? last : false;
+    }, 20000, 1000).catch(error => ({ ok: false, error: error.message, last }));
+    const dialogs = (run.javascriptDialogs || []).slice(previousDialogCount);
+    if (!verified.ok) throw new Error(`Check flag change was not verified: ${JSON.stringify({ verified, dialogs })}`);
     return { requested: target, verified, dialogs };
   }
 
@@ -3739,8 +3903,9 @@ async function configureAndPressPrintPreview(port, { printer, color, duplex, pre
       throw new Error('print preview remained open after pressing print');
     }
   } else if (closeWithoutPrinting) {
-    await cancelPrintPreview(preview);
-    await wait(1000);
+    // キャンセルを押すと印刷プレビュー自体が閉じるため、この命令の応答が返らないことがある。3秒で次へ進む
+    await Promise.race([cancelPrintPreview(preview).catch(() => null), wait(3000)]);
+    await closePrintPreviews(port);
   }
   return { ...verified, screenshotPath };
 }
