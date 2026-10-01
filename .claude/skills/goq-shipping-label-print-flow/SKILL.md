@@ -1,7 +1,20 @@
 ---
 name: goq-shipping-label-print-flow
-description: ベニー様版 GoQ 出荷フロー（GoQログイン → ピッキングリストをローカル印刷 → B2クラウド用送り状CSVをGoQから出力 → ヤマトビジネスメンバーズで送り状印刷）。GoQ の仕分け、ステータス修正、日時指定チェック、「印刷して」「刷って」（ピッキングリスト・送り状）の依頼で使う。
+description: ベニー様版 GoQ 出荷フロー（GoQログイン → ピッキングリストをローカル印刷 → B2クラウド用送り状CSVをGoQから出力 → ヤマトビジネスメンバーズで送り状発行・印刷 → 送り状番号を GoQ に戻し出荷日を入れて ★発送済み → 当日の出荷件数を報告）。「出荷して」「出荷作業」「今日の出荷」「発送処理して」「出荷フロー回して」「送り状まで全部」は工程1〜5の通し（npm run ship）、「印刷して」「刷って」はピッキングリスト＋送り状の印刷まで、「送り状発行して」「B2で発行」は送り状のみ、「送り状番号取込」「伝票番号を戻して」「発送済みにして」は番号戻し〜★発送済み、「今日の出荷件数」「出荷報告」は件数報告、「仕分け」は印刷前の整理だけ。GoQ のステータス修正・日時指定チェックの依頼でも使う。
 ---
+
+## Triggers（言い回しと実行範囲）
+
+| 言い回し | 実行範囲 | コマンド |
+| --- | --- | --- |
+| 出荷して / 出荷作業 / 今日の出荷 / 発送処理して / 出荷フロー回して / 送り状まで全部 | 工程1〜5の通し（印刷 → 送り状発行 → 番号戻し → 出荷日 → ★発送済み → 件数報告） | `npm run ship -- --statuses nekoposu,takkyubin` |
+| 印刷して / 刷って | 工程1〜2（ピッキングリスト＋送り状）。番号戻しは続けて指示があれば | `npm run goq:print -- --status <status> --execute` → `npm run yamato:print -- --handoff <file>` |
+| 送り状発行して / 送り状刷って / B2で発行 | 工程2のみ（引き継ぎファイルが必要。ピッキング印刷の証跡が無ければ止まる） | `npm run yamato:print -- --handoff <file>` |
+| 送り状番号取込 / 伝票番号を戻して / 発送済みにして | 工程3〜4 | `npm run yamato:export-tracking -- --handoffs ...` → `npm run yamato:import-tracking -- --set-ship-date today --handoffs ...` |
+| 今日の出荷件数 / 出荷報告 | 工程5（★発送済み以降に移した件数をステータス別に） | `import-tracking-to-goq.mjs` の `today shipping report`、または `npm run ship` の最後の行 |
+| 仕分け | 印刷前の整理だけ（印刷・発行はしない） | 既存の仕分け手順 |
+
+トリガーに関係なく、航空危険物の「重要なお知らせ」と、B2 の発行済み一覧に引き継ぎに無い注文がある場合は、毎回オペレーターに確認してから `--air-notice-approved` / `--allow-extra` を付ける。
 
 # GoQ Shipping Label Print Flow (Benny version)
 
@@ -10,7 +23,11 @@ description: ベニー様版 GoQ 出荷フロー（GoQログイン → ピッキ
 1. GoQ login (`tools/goq-login.mjs`, credentials from `.env`; the runner does this automatically).
 2. Picking list built locally from the Benny master sheet and printed to `普通紙` (`tools/local-picking/`).
 3. Shipping-label data exported from GoQ as a **B2 Cloud CSV** (`labelMode: b2-csv`), verified against the target snapshot, and written to a handoff file. GoQ's own B2 Cloud API button is not pressed for Yamato-family statuses.
-4. Yamato Business Members (B2 Cloud): import the CSV, print labels (`ヤマト` / `ネコポス`), export tracking numbers, import them into GoQ (`tools/yamato-b2/`).
+4. Yamato Business Members (B2 Cloud): import the CSV (picking-evidence gate), print labels to `C5240 ヤマト/コンパクト` / `C5240 ネコポス` (`tools/yamato-b2/print-labels.mjs`).
+5. Tracking round trip: export the issued data from B2 (`export-tracking.mjs`), import it into GoQ 送り状番号取込, verify each order on its detail page, set today's shipping date, and move only orders with both tracking number and shipping date to ★発送済み (`import-tracking-to-goq.mjs --set-ship-date today`).
+6. Report today's shipped count per status.
+
+One command runs 1–6 in order and stops with a reason and a resume hint when a gate fails: `npm run ship -- [--statuses nekoposu,takkyubin] [--air-notice-approved] [--allow-extra] [--skip-goq] [--skip-labels]` (`tools/benny-shipping-flow.mjs`). Pass `--air-notice-approved` only after the operator has confirmed the items for the 航空危険物 notice, and `--allow-extra` only after confirming that an order in B2's issued list but not in the handoffs is our own manual issue.
 
 Runtime is local Node.js + Chrome started by `scripts\start-chrome-cdp.ps1`. Docker is not used.
 
@@ -85,7 +102,13 @@ Applies to all Benny statuses: `nekoposu` (★ネコポス・クリックポス�
 3. In the GoQ list footer, select the B2 Cloud format in the `送り状データ出力` select (`#trader_s`, option value `b2_cloud` by default; `.env` `GOQ_B2_CSV_FORMAT_VALUE` overrides) and press the output button (`name="B020"`). The runner hooks the form submission, fetches the same request, and saves the CSV (Shift_JIS) under `.o11y/goq-unified-print-flow/downloads/`.
 4. Verify the CSV: every target GoQ ID or order number appears in at least one data row, and no data row belongs to an order outside the snapshot. Multi-parcel duplicates of the same order are allowed. On mismatch, stop and report.
 5. Write the handoff file under `.o11y/goq-unified-print-flow/b2-handoff/` (`csv`, `targets`, `labelPrinter`, run log path) and record `exported shipping label csv`, `verified shipping label csv against target snapshot`, and `wrote b2 cloud handoff`.
-6. The Yamato Business Members side (`tools/yamato-b2/`) then logs in from `.env`, confirms the company name `合同会社Ｂｅｎｙ` on the home page, imports the CSV into B2 Cloud, checks the import result (count and error rows), prints the labels to the status printer with the same print-preview checks, exports issued tracking numbers, and imports them into GoQ `送り状番号取込`.
+6. The Yamato Business Members side (`tools/yamato-b2/`) then logs in from `.env`, confirms the company name `合同会社Ｂｅｎｙ` on the home page, imports the CSV into B2 Cloud, checks the import result (count and error rows), prints the labels to the status printer with the same print-preview checks, exports issued tracking numbers, and imports them into GoQ `送り状番号取込`. Use `npm run yamato:print -- --handoff <file>` (`print-labels.mjs`), which does import → confirm → issue → print in one go. Rules enforced there:
+   - Picking before labels: the import refuses a handoff whose GoQ run log lacks `printed picking list` to the picking printer. A `--preview-only-picking` run must not be followed by label issuance.
+   - Do not leave the B2 import-result screen idle (about 30 minutes causes a B2 system error); that is why the steps run in one process.
+   - The 航空危険物 "重要なお知らせ" popup (air_shipment_notice.html) is never accepted automatically. Stop, show the text, and continue only with operator approval (`--air-notice-approved`); the approval is recorded in the handoff.
+   - Label product names: B2 prints 品名1/2, not 品名コード. `rewrite-b2-csv.mjs` writes the 品名コード into both; check the printed label shows the short code.
+   - Reprint after a misprint uses the B2 main menu 「再発行」 (`reissue_search`), not a new import (a new import would issue new tracking numbers).
+   - Tracking round trip: `npm run yamato:export-tracking -- --handoffs <files>` then `npm run yamato:import-tracking -- --handoffs <files>`. The export verifies every handoff target is in B2's issued list for today and stops on extra orders (`--allow-extra` after confirming they are ours). The import verifies each order on its GoQ detail page (`da19[0]`), since list rows do not display the tracking number, and moves to ★発送済み only orders that have both the verified tracking number and a shipping date (`--set-ship-date today` writes today's date through the order detail page first). End with today's shipped count per status.
 7. The set is complete only when picking print, CSV verification, Yamato import/print, and GoQ tracking import/verification all pass. Report `送り状未発行/除外された可能性あり` for any target without a tracking number after the round trip.
 
 ## Label Generation Dialog Handling
@@ -116,14 +139,14 @@ This section applies only to `goq-api` label mode (GoQ-side API generation). In 
 
 ## Printer Routing
 
-Use these destinations unless the user explicitly says otherwise. Printer names on this PC are `FUJIFILM Apeos C5240普通紙` / `FUJIFILM Apeos C5240ヤマト` / `FUJIFILM Apeos C5240佐川` / `FUJIFILM Apeos C5240ネコポス（手差し）`; matching is by substring and `.env` `PRINTER_*` overrides it.
+Use these destinations unless the user explicitly says otherwise. Printer names on this PC are the Apeos C5240 queues with the `C5240 ` prefix; matching is by substring (`tools/lib/printers.mjs`, `.env` `PRINTER_*` overrides). The queues without the prefix (`普通紙` / `ヤマト/コンパクト` / `ネコポス` / `佐川`) are the old C3530 driver and must not be used; always pass the prefixed name (a bare `ヤマト` matched the old queue on 2026-10-01).
 
-- Picking list: `普通紙`
-- Sagawa normal labels: `佐川`
-- Sagawa labels size 120+: `佐川`
-- Yamato Takkyubin labels: `ヤマト`
-- Takkyubin Compact labels: `ヤマト`
-- Nekopos labels: `ネコポス`
+- Picking list: `C5240 普通紙`
+- Sagawa normal labels: `C5240 佐川`
+- Sagawa labels size 120+: `C5240 佐川`
+- Yamato Takkyubin labels: `C5240 ヤマト/コンパクト`
+- Takkyubin Compact labels: `C5240 ヤマト/コンパクト`
+- Nekopos labels: `C5240 ネコポス`
 
 Amazon-specific handling: do not split or route Amazon orders differently unless the user explicitly requests Amazon-specific separation.
 

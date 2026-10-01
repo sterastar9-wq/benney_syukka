@@ -2,6 +2,9 @@
 // GoQ が出力した送り状データCSV（B2クラウド基本レイアウト、見出しなし・98列・Shift_JIS）を、取り込む直前に書き換える。
 //   - 5列目 出荷予定日  → 今日（日本時間）。B2クラウドは「本日〜30日後」以外を修正必要エラーにするため（2026-10-01 確認）
 //   - 27列目 品名コード1 / 29列目 品名コード2 → data/hinmei-codes.csv の品名コード（例: ｵｰﾙﾄﾞｽﾊﾟｲｽ(1)5580、25文字以内）
+//   - 28列目 品名1 / 30列目 品名2 → 同じ品名コードの文字列。**送り状に印字されるのは品名1/2** で、品名コードは印字されない
+//     （2026-10-01 に品名コードだけ書き換えてネコポス12件を発行し、GoQ の商品名が丸ごと印字されたため追加）。
+//     品名コードを引けなかった品目は、品名コード・品名とも GoQ の値のまま残して警告する
 // 品名コードは同じ注文のピッキング用CSV（GoQ管理番号・商品SKU・商品コードがある）から1品目・2品目のSKUを取って引く。
 // 書き換える欄以外はバイト列のまま残す（Shift_JISの2バイト目は , " 改行 と重ならないので、バイト単位で列を区切れる）。
 //
@@ -126,7 +129,7 @@ export function rewriteB2Csv({ bytes, pickingOrders, hinmeiCodes, shipDate = tod
     } else {
       if (items.length > 2) warnings.push({ row: rowNo, customerNo, kind: '3品以上の注文（品名コードは先頭2品のみ。残りはピッキングリストの「3品以上の注文リスト」で確認）', items: items.length });
       const used = new Set();
-      [COL.itemCode1, COL.itemCode2].forEach((col, slot) => {
+      [[COL.itemCode1, COL.itemName1], [COL.itemCode2, COL.itemName2]].forEach(([col, nameCol], slot) => {
         const goqValue = ascii(fields[col]).trim();
         if (!goqValue) return; // GoQ が入れていない欄（2品目が無い注文など）は触らない
         const head = v => String(v || '').trim().slice(0, GOQ_ITEM_CODE_WIDTH);
@@ -141,8 +144,11 @@ export function rewriteB2Csv({ bytes, pickingOrders, hinmeiCodes, shipDate = tod
         if (!code) { keep(`品名コードが未登録（data/hinmei-codes.csv）: ${sku}`); return; }
         if ([...code].length > maxLen) { keep(`品名コードが${maxLen}文字を超えています: ${code}`); return; }
         try {
-          fields[col] = encodeSjisNarrow(code);
-          change.codes.push({ slot: slot + 1, sku, from: goqValue, to: code });
+          const encoded = encodeSjisNarrow(code);
+          const nameFrom = fields[nameCol];
+          fields[col] = encoded;
+          fields[nameCol] = encoded; // 送り状に印字される品名欄にも同じ品名コードを入れる
+          change.codes.push({ slot: slot + 1, sku, from: goqValue, to: code, nameBytesBefore: nameFrom.length });
         } catch (error) {
           keep(String(error.message));
         }

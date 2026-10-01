@@ -52,6 +52,7 @@ export class CdpPage {
     this.pending = new Map();
     this.dialogs = [];
     this.onDialog = null;
+    this.onEvent = null; // (method, params) => void: ダウンロード進捗などのイベントを受け取りたいときに設定する
     this.ws = new WebSocket(cdpWebSocketUrl(wsUrl));
     this.ready = new Promise((resolve, reject) => {
       this.ws.once('open', resolve);
@@ -64,6 +65,7 @@ export class CdpPage {
         this.pending.delete(msg.id);
         return;
       }
+      if (msg.method && this.onEvent) { try { this.onEvent(msg.method, msg.params || {}); } catch {} }
       if (msg.method === 'Page.javascriptDialogOpening') {
         const detail = { type: msg.params?.type || '', message: msg.params?.message || '', at: new Date().toISOString() };
         this.dialogs.push(detail);

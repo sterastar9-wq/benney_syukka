@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv, envNumber } from '../lib/env.mjs';
 import { CdpPage, listTargets, openTarget, wait, waitUntil } from '../lib/cdp.mjs';
 import { YAMATO_HOST, ensureYamatoLogin, readYamatoLoginState } from './login.mjs';
+import { PICKING_PRINTER, destinationIncludesPrinter } from '../lib/printers.mjs';
 
 const B2_HOST = 'newb2web.kuronekoyamato.co.jp';
 const B2_MAIN_MENU = `https://${B2_HOST}/main_menu.html`;
@@ -54,7 +55,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
     const key = arg.slice(2);
-    if (['stop-before-issue', 'stop-after-import', 'skip-print', 'execute'].includes(key)) out[key] = true;
+    if (['stop-before-issue', 'stop-after-import', 'skip-print', 'execute', 'reimport', 'picking-confirmed'].includes(key)) out[key] = true;
     else out[key] = argv[++i];
   }
   return out;
@@ -79,9 +80,12 @@ async function connectB2(port) {
 
 async function ensureB2MainMenu(page) {
   const url = await page.url();
-  if (url.includes(B2_HOST)) {
-    const text = await page.pageText(300);
-    if (!/ログイン/.test(text) || /ログアウト/.test(text)) return { via: 'already-in-b2', url };
+  // system_error.html（放置・直接URL指定などで出る）やログイン画面は B2 に入っている扱いにしない。
+  // その場合はメンバーズのホームから useService で入り直す（B2 を直接 URL で開くと再び system_error になる）
+  if (url.includes(B2_HOST) && !/system_error|login/i.test(url)) {
+    const text = await page.pageText(1500);
+    if (!/システムエラー|ログイン画面へ/.test(text) && (!/ログイン/.test(text) || /ログアウト/.test(text))) return { via: 'already-in-b2', url };
+    step('b2 page is not usable; re-entering', { url, head: text.slice(0, 120) });
   }
   const state = await readYamatoLoginState(page);
   if (!String(state.url).includes('bmypage.kuronekoyamato')) await page.navigate(YBM_HOME, 3000);
@@ -101,6 +105,24 @@ async function setFileInput(page, selector, filePath) {
   const set = await page.send('DOM.setFileInputFiles', { nodeId: node.result.nodeId, files: [path.resolve(filePath)] });
   if (set.error) throw new Error(`setFileInputFiles failed: ${JSON.stringify(set.error)}`);
   await page.eval(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+}
+
+// ピッキングリスト → 送り状 の順序ゲート。引き継ぎファイルの GoQ 側 run log に「printed picking list」
+// （または resume 時の「reused previous picking list print for resume」）があり、送信先がピッキング用プリンタであること。
+// 2026-10-01 に --preview-only-picking の run から送り状を発行してしまったため、ヤマト側（送り状が作られる側）でも止める。
+export function checkPickingEvidence(handoff) {
+  const runLog = handoff.runLog;
+  if (!runLog || !fs.existsSync(runLog)) return { ok: false, reason: `GoQ 側の run log が見つかりません: ${runLog}` };
+  const run = JSON.parse(fs.readFileSync(runLog, 'utf8'));
+  const steps = run.steps || [];
+  const printed = steps.find(s => s.name === 'printed picking list') || steps.find(s => s.name === 'reused previous picking list print for resume');
+  if (!printed) {
+    const previewOnly = steps.find(s => s.name === 'verified picking print preview without pressing print');
+    return { ok: false, reason: previewOnly ? 'ピッキングリストはプレビュー確認だけで印刷されていません（--preview-only-picking）。先にピッキングリストを印刷してください。' : 'ピッキングリストの印刷記録（printed picking list）がありません。' };
+  }
+  const destination = printed.detail?.destination || printed.detail?.previousPicking?.destination || '';
+  if (!destinationIncludesPrinter(destination, PICKING_PRINTER)) return { ok: false, reason: `ピッキングリストの送信先が「${PICKING_PRINTER}」ではありません: ${destination || '(記録なし)'}`, step: printed.name, destination };
+  return { ok: true, step: printed.name, destination, at: printed.at };
 }
 
 async function describeImportResult(page) {
@@ -130,6 +152,11 @@ async function main() {
   const handoff = JSON.parse(fs.readFileSync(args.handoff, 'utf8'));
   run.handoff = { file: path.resolve(args.handoff), csv: handoff.csv, targetCount: handoff.targets?.length, labelPrinter: handoff.labelPrinter, statusKey: handoff.statusKey, date: handoff.date };
   if (!fs.existsSync(handoff.csv)) fail(`CSV が見つかりません: ${handoff.csv}`, 2);
+  if (handoff.yamato?.printed === true && args.reimport !== true) fail('この引き継ぎファイルの送り状は印刷済みです（yamato.printed=true）。取込み直す場合は --reimport を付けてください。', 2);
+  const picking = checkPickingEvidence(handoff);
+  run.pickingEvidence = picking;
+  if (!picking.ok && args['picking-confirmed'] !== true) fail(`ピッキングリスト→送り状 の順序ゲート: ${picking.reason}（オペレーターが別途印刷済みと確認した場合だけ --picking-confirmed）`, 2);
+  step('checked picking list evidence', { ...picking, confirmedByOperator: picking.ok ? undefined : true });
   const stopAfterImport = args['stop-after-import'] === true || args['stop-before-issue'] === true || args.execute !== true;
   run.mode = stopAfterImport ? 'import-only' : 'execute';
 

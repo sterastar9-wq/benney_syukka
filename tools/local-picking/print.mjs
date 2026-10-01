@@ -30,7 +30,7 @@ function normalizeText(value) {
 
 const listTargets = port => fetch(cdpHttpUrl(port, '/json/list')).then(r => r.json());
 
-class Session {
+export class Session {
   static async connect(wsUrl) {
     const ws = new WebSocket(cdpWebSocketUrl(wsUrl), { perMessageDeflate: false });
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -102,7 +102,7 @@ export async function launchIsolatedChrome({ port = 9334, chromePath = findChrom
   };
 }
 
-async function configurePrintPreview(port, { printer, color, duplex, press, screenshotDir }) {
+export async function configurePrintPreview(port, { printer, color, duplex, press, screenshotDir }) {
   const target = await waitUntil(async () => (await listTargets(port)).find(t => t.type === 'page' && t.url.startsWith('chrome://print/')), 30000, 500);
   const preview = await Session.connect(target.webSocketDebuggerUrl);
   try {

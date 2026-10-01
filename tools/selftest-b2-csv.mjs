@@ -67,7 +67,7 @@ assert.equal(decoded.text, 'あ,1');
   ];
   const codes = new Map([['sku-a', 'ﾃｽﾄA(1)1111'], ['sku-b', 'ﾃｽﾄB(2)2222']]);
 
-  // 7. 2品の注文: 出荷予定日と品名コード1・2だけ変わり、他の列（全角の品名）はバイト列のまま
+  // 7. 2品の注文: 出荷予定日・品名コード1・2 と、送り状に印字される品名1・2 が品名コードになる。他の列はバイト列のまま
   const ok2 = rewriteB2Csv({ bytes: toBytes([makeRow('500-1', 'SKU-A', 'SKU-B')]), pickingOrders: picking, hinmeiCodes: codes, shipDate: '2026/10/01' });
   assert.equal(ok2.ok, true, JSON.stringify(ok2.problems));
   const out = decodeCsvBuffer(ok2.bytes).text.split('\r\n')[0].split(',');
@@ -75,7 +75,8 @@ assert.equal(decoded.text, 'あ,1');
   assert.equal(out[4], '2026/10/01');
   assert.equal(out[26], 'ﾃｽﾄA(1)1111');
   assert.equal(out[28], 'ﾃｽﾄB(2)2222');
-  assert.equal(out[27], 'テスト');
+  assert.equal(out[27], 'ﾃｽﾄA(1)1111', '品名1（送り状に印字される欄）も品名コードになること');
+  assert.equal(out[29], 'ﾃｽﾄB(2)2222', '品名2 も品名コードになること');
   assert.deepEqual(encodeSjisNarrow('ｱ(1)'), Buffer.from([0xb1, 0x28, 0x31, 0x29]));
 
   // 8. 品名コード未登録 → 発行は止めず（B2のエラーではない）、GoQの値のまま残して警告
@@ -84,7 +85,9 @@ assert.equal(decoded.text, 'あ,1');
   assert.equal(missingCode.blocked.length, 0);
   assert.equal(missingCode.importRows, 1);
   assert.match(missingCode.warnings[0].kind, /未登録/);
-  assert.equal(decodeCsvBuffer(missingCode.bytes).text.split(/\r?\n/)[0].split(',')[26], 'SKU-X');
+  const missingOut = decodeCsvBuffer(missingCode.bytes).text.split(/\r?\n/)[0].split(',');
+  assert.equal(missingOut[26], 'SKU-X');
+  assert.equal(missingOut[27], 'テスト', '品名コードを引けない品目は品名1 も GoQ の値のまま');
 
   // 9. 25文字を超える品名コード → 止まる
   const tooLong = rewriteB2Csv({ bytes: toBytes([makeRow('500-1', 'SKU-A', 'SKU-B')]), pickingOrders: picking, hinmeiCodes: new Map([['sku-a', 'ｱ'.repeat(26)], ['sku-b', 'ﾃｽﾄB(2)2222']]), shipDate: '2026/10/01' });

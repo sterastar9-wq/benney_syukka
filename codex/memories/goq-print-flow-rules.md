@@ -9,6 +9,10 @@
 - The executor records `run.goal` before side effects. The reviewer starts from that goal, verifies status/date/scope/output-mode alignment, and then verifies detailed guardrails.
 - Credentials come only from the repository `.env`. The runner verifies the GoQ login state first and logs in from `.env` when the login page is shown.
 
+## One-command flow (Benny)
+
+- `npm run ship -- [--statuses nekoposu,takkyubin] [--air-notice-approved] [--allow-extra]` (`tools/benny-shipping-flow.mjs`) runs: reviewed GoQ print flow per status → `print-labels.mjs` per handoff → `export-tracking.mjs` → `import-tracking-to-goq.mjs --set-ship-date today` → today's shipped count per status. It stops at the first failed gate and prints the resume hint; operator-only decisions (航空危険物 notice, orders in B2 not in the handoffs) proceed only with the explicit flags.
+
 ## B2 Cloud CSV Route (Benny Yamato-family)
 
 - Benny's statuses are `nekoposu` (★ネコポス・クリックポスト, stat 30), `takkyubin` (★宅急便, 26), and `compact` (only when `GOQ_COMPACT_STAT` is set; ★クール便 27 is not handled by Benny); all use `labelMode: b2-csv`. The GoQ B2 Cloud API button (`#B2CloudGeneratePdfApi`) is never pressed. Rows with carrier `日本郵便` are excluded as carrier mismatch. Picking CSV is custom id 1.
@@ -86,6 +90,10 @@
 - b2-csv mode: compare the CSV rows with the target snapshot; later compare Yamato's issued list and GoQ's imported tracking numbers with the same snapshot.
 - A target row with no tracking number or label-issued marker after the whole set is `送り状未発行/除外された可能性あり`. Always report unissued label count and details.
 - `--label-first` is emergency/special-case only.
+- Yamato side gate: `tools/yamato-b2/import-and-print.mjs` (and `print-labels.mjs`) refuse to import a handoff whose GoQ run log has no `printed picking list` step to the picking printer. A `--preview-only-picking` run is a dry run of the picking side; never issue labels from it (violated on 2026-10-01).
+- Label product names (b2-csv): B2 prints 品名1/2, not 品名コード1/2. `rewrite-b2-csv.mjs` writes the 品名コード from `data/hinmei-codes.csv` into both pairs; items without a code keep GoQ's values in both and warn.
+- Tracking round trip (b2-csv): `export-tracking.mjs` reads B2's issued list via `dataView`, requires every handoff target to be issued, stops on extra orders unless `--allow-extra`, and verifies the downloaded CSV against the list. `import-tracking-to-goq.mjs` imports it into GoQ (`yamatob2webfile` / `submitdata('YamatoB2WEB')`), verifies each order on its detail page (`da19[0]`; the list rows show no tracking number even after import), and moves to ★発送済み (`select[name=status_id]`=29 + 変更) only orders with both a verified tracking number and a shipping date, confirming they left the source status. Benny's statuses do not manage the shipping date and the list has no bulk date input, so `--set-ship-date today` writes `a59` on the order detail page and saves with 「入力内容を反映する」 first. Report today's shipped count per status at the end.
+- B2 import → 印刷内容の確認へ → 発行 → print must run in one go (`print-labels.mjs`); the import-result screen left idle for ~30 minutes makes B2 return a system error. The 航空危険物 notice popup is accepted only with operator approval (`--air-notice-approved`). Misprints are reprinted from the B2 「再発行」 menu, never by re-importing.
 
 ## Label Generation Dialog Handling
 
@@ -110,7 +118,7 @@
 
 - Every print-output step must record the expected printer and the actual Chrome print-preview destination.
 - Review must fail when the destination is missing or does not match the status-specific printer route.
-- Printer names on this PC: `FUJIFILM Apeos C5240普通紙` / `FUJIFILM Apeos C5240ヤマト` / `FUJIFILM Apeos C5240佐川` / `FUJIFILM Apeos C5240ネコポス（手差し）`. Matching is by substring; override with `.env` `PRINTER_*`.
+- Printer names on this PC: `C5240 普通紙` / `C5240 ヤマト/コンパクト` / `C5240 ネコポス` / `C5240 佐川` (Apeos C5240 queues, `tools/lib/printers.mjs` defaults; override with `.env` `PRINTER_*`). Matching is by substring, so always pass the `C5240 ` prefix: the unprefixed `普通紙` / `ヤマト/コンパクト` / `ネコポス` / `佐川` queues are the old C3530 driver and must not be used (a bare `ヤマト` selected the old queue on 2026-10-01).
 - Picking list destination must include `普通紙`.
 - Sagawa and hold-Sagawa label destinations must include `佐川`.
 - Yamato and Compact label destinations must include `ヤマト`.

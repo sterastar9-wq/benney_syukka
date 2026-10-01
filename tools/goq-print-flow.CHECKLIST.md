@@ -43,6 +43,9 @@ The executor must read this checklist before side effects. The reviewer must use
 20a. (Benny Yamato-family, `labelMode: b2-csv`) Select the B2 Cloud format in `#trader_s`, press the output button, and save the CSV. Record `exported shipping label csv`.
 20b. Verify the CSV against the target snapshot (every target present, no extra rows) and record `verified shipping label csv against target snapshot`. Stop on mismatch.
 20c. Write the handoff file for `tools/yamato-b2/` and record `wrote b2 cloud handoff`. Steps 21-28 below do not apply to b2-csv mode; label printing happens on the Yamato Business Members side with the same print-preview checks and printer routing.
+20d. (Benny Yamato side) Run `npm run yamato:print -- --handoff <file>` (`tools/yamato-b2/print-labels.mjs`): import → result check (count = targets, no error rows) → 印刷内容の確認へ → issue → print, in one go. It refuses to import when the GoQ run log has no `printed picking list` step to the picking printer (a `--preview-only-picking` run is not a printed picking list). If the 航空危険物 "重要なお知らせ" appears, it stops; continue only with operator approval (`--air-notice-approved`) after checking the items.
+20f. (Benny Yamato side) Tracking round trip: `npm run yamato:export-tracking -- --handoffs <files>` (B2 発行済データの検索 → verify every target is issued → 外部ファイルに出力 CSV, stops on orders missing from the handoffs unless `--allow-extra`), then `npm run yamato:import-tracking -- --handoffs <files>` (GoQ 送り状番号取込 B2クラウド欄 → per-order verification on the order detail page `da19[0]`, because the list rows do not show the number → move only orders that have **both** a verified tracking number and a shipping date to ★発送済み and confirm they left the source status; use `--set-ship-date today` to write today's shipping date on the order detail page first, because Benny's statuses do not manage the shipping date). Report any target without a verified tracking number as `送り状未発行/除外された可能性あり`, and finish with today's shipped count per status.
+20e. Label product names: the B2 label prints 品名1/2. `rewrite-b2-csv.mjs` must have written the 品名コード (`data/hinmei-codes.csv`) into 品名コード1/2 and 品名1/2; verify the label shows the short code (e.g. `ｵｰﾙﾄﾞｽﾊﾟｲｽ(1)5580`), not the GoQ product name.
 21. (goq-api mode) Press the status-specific shipping-label generation button.
 22. If a modal, alert, confirm, visible error, or error report appears, read and record the text. Do not continue blindly after closing it.
 22a. For Yamato-family statuses (`yamato`, `compact`, `nekoposu`), verify that the B2 Cloud generation click actually produced a `RequestB2CloudDeliveryInvoice.php` POST. If the download list does not show either success PDF or error report after the bounded reload window, treat it as "request not sent", not as an address error.
@@ -70,7 +73,7 @@ Other statuses on Benny's GoQ (not print targets): 29 ★発送済み, 32 ★出
 
 Picking CSV is custom CSV id 1 (`カスタムCSV全項目(サンプル)`), which contains 商品名 / 個数 / 商品SKU / 商品コード / JANコード / GoQ管理番号 / 送付先氏名 / 配送方法(複数配送先) / チェック項目. Override with `.env` `GOQ_PICKING_CSV_CUSTOM_ID`.
 
-Printer names on this PC contain these strings (`FUJIFILM Apeos C5240普通紙` / `ヤマト` / `佐川` / `ネコポス（手差し）`). `.env` `PRINTER_*` overrides them.
+Printer names on this PC: use the `C5240 ` prefixed queues (`C5240 普通紙` / `C5240 ヤマト/コンパクト` / `C5240 ネコポス` / `C5240 佐川`). Queues without the prefix are the old C3530 driver and must not be used. `.env` `PRINTER_*` overrides the defaults in `tools/lib/printers.mjs`.
 
 ★クール便 (27) is not handled by Benny and is not a flow target. Before shipping date / label steps, the runner changes carrier 日本郵便 → ヤマト運輸, then sets the チェック項目/フラグ in a separate operation (`nekoposu` → ネコポス, `compact` → コンパクト; ★宅急便 has none), because GoQ cannot change both at once. Amazon-only variants (`nekoposu-amazon`, `takkyubin-amazon`) exist for compatibility only; Benny's GoQ has no store tab (`#st`).
 
@@ -84,6 +87,7 @@ Base status keys must not implicitly apply the Amazon tab. Use an Amazon variant
 - Nekopos labels must print to `ネコポス`, not `ヤマト`.
 - Sagawa labels must print to `佐川`, not a Yamato-family printer.
 - Picking lists always print to `普通紙` regardless of status.
+- Specify printers with the `C5240 ` prefix; a bare `ヤマト` substring selected the old C3530 queue on 2026-10-01.
 
 ## Completion Standard
 
@@ -96,5 +100,5 @@ The run is complete only when all of these are true:
 - Picking list output completed to `普通紙`.
 - Shipping-label target snapshot was recorded.
 - goq-api mode: label issuance was verified against the target snapshot and labels printed to the correct status-specific destination.
-- b2-csv mode: the exported CSV matched the target snapshot, the handoff file was written, and the Yamato Business Members side (import, print, tracking export, GoQ tracking import) completed.
+- b2-csv mode: the exported CSV matched the target snapshot, the handoff file was written, and the Yamato Business Members side completed: import with the picking-evidence gate, label print to the `C5240 ` printer, tracking CSV export verified against the handoff targets, GoQ tracking import verified per order on the detail page, shipping date set to today, verified orders moved to ★発送済み, and today's shipped count reported per status (`npm run ship` does all of this in order).
 - Review reports no violations and no unaccepted warnings.
