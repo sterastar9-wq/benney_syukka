@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-// ベニー様フロー 4: ヤマトビジネスメンバーズ（B2クラウド）に GoQ の送り状CSVを取り込み、送り状を印刷し、
-// 発行済データを出力して GoQ に送り状番号を取り込み、受注を ★発送済み に移す。
+// ベニー様フロー 4 の前半: ヤマトビジネスメンバーズ（B2クラウド）に GoQ の送り状CSVを取り込み、取込み結果（件数・エラー行）を確認して止まる。
+// 後続は別スクリプトが担う（通常は print-labels.mjs がこのスクリプトを呼んでから続ける）:
+//   発行・印刷                … issue-and-print.mjs（print-labels.mjs が取込み→確認→発行を1本で行う）
+//   送り状番号の出力          … export-tracking.mjs
+//   GoQ への取込み・★発送済み … import-tracking-to-goq.mjs
+//   全体の通し実行            … tools/benny-shipping-flow.mjs（npm run ship）
 //
-//   node tools/yamato-b2/import-and-print.mjs --handoff <引き継ぎJSON> [--port 9223] [--stop-before-issue] [--stop-after-import]
+//   node tools/yamato-b2/import-and-print.mjs --handoff <引き継ぎJSON> [--port 9223] [--reimport] [--picking-confirmed]
 //
-// 段階（run log に記録し、途中で止まっても続きから再開できるよう handoff の yamato.* を更新する）
-//   1. ログイン確認（.env）→ B2クラウドのメインメニュー
+// 段階（run log に記録し、handoff の yamato.* を更新する）
+//   0. ゲート: ピッキングリスト印刷の証跡（GoQ 側 run log の printed picking list、送信先がピッキング用プリンタ）／印刷済み引き継ぎの再取込み防止
+//   1. ログイン確認（.env）→ B2クラウドのメインメニュー（system_error 画面ならメンバーズのホームから入り直す）
 //   2. 外部データから発行: 取込みパターン=基本レイアウト、取込み開始行=1、CSV を選択 → 取込み開始
-//   3. 取込み結果表示: エラー行の有無と件数を確認（件数 = 引き継ぎの対象件数でなければ停止）
-//   4. 印刷内容の確認へ → 発行開始 → PDF を送り状プリンタへ印刷（白黒・両面OFF・印刷プレビューで送信先確認）
-//   5. 発行済データの検索（出荷予定日=今日）→ 全選択 → 外部ファイルに出力 → CSV 保存
-//   6. GoQ 送り状番号取込（B2クラウド欄）→ 取込結果確認 → 対象行に伝票番号が入ったことを検証 → ★発送済み へ変更
-//
-// 現時点では 1〜3 を実装済み。4 以降は取込み結果画面の構造を確認してから実装する（--stop-after-import が既定）。
+//   3. 取込み結果表示: エラー行の有無と件数を確認し、取込み結果の画面で止まる（発行はしない）
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -229,11 +229,11 @@ async function main() {
     fs.writeFileSync(args.handoff, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
 
     if (stopAfterImport) {
-      step('stopped after import by mode', { mode: run.mode, note: '発行・印刷は行っていません。取込み結果を確認してから --execute で続行します。' });
+      step('stopped after import by mode', { mode: run.mode, note: '発行・印刷はこのスクリプトでは行いません。print-labels.mjs（取込み→確認→発行を1本で）または issue-and-print.mjs で続けます。' });
       console.log(JSON.stringify(run, null, 2));
       return;
     }
-    fail('発行・印刷の工程は未実装です（取込み結果画面の確認後に実装）。', 4);
+    fail('このスクリプトは取込みまでです。発行・印刷は print-labels.mjs（または issue-and-print.mjs）で行ってください。', 4);
   } catch (error) {
     fail(error.stack || String(error), 1);
   } finally {
